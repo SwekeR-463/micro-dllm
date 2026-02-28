@@ -89,8 +89,9 @@ python3 inference.py \
 
 ## Practical Next Improvements/Experiments
 
-1. Add resume training from checkpoint (`--resume model.pt`)
-2. Train on 100-200 Tiny Stories
-3. Muon Ablations
-4. Train on SynTH/fineweb-edu
-5. Try speed running for a 200M+ param model
+- [ ] Add resume training from checkpoint (`--resume model.pt`)
+- [ ] Train on 100-200 Tiny Stories
+- [ ] Do loss curve ablations with gpt2 config for arm vs dif on 100-200 tiny stories
+- [ ] Muon Ablations
+- [ ] Train on SynTH/fineweb-edu
+- [ ] Try speed running for a 200M+ param model
