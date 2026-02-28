@@ -4,6 +4,7 @@ This repo trains a micro-dLLM(~10.7M) based on [mercury's training and inference
 
 
 [![Diffusion Trace](./diffusion_trace.gif)](./diffusion_trace.mp4)
+Direct video: [diffusion_trace.mp4](./diffusion_trace.mp4)
 
 ## What This Implements
 
