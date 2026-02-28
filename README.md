@@ -1,11 +1,9 @@
 # micro-dllm
 
-This repo trains a micro-dLLM(~10.7M) based on (mercury's training and inference)[https://arxiv.org/abs/2506.17298] approach over characters and generates text with iterative denoising.
+This repo trains a micro-dLLM(~10.7M) based on [mercury's training and inference](https://arxiv.org/abs/2506.17298) approach over characters and generates text with iterative denoising.
 
 
-<video src="./diffusion_trace.mp4" controls width="800"></video>
-
-[Download/View MP4](./diffusion_trace.mp4)
+Diffusion Trace Video: [diffusion_trace.mp4](./diffusion_trace.mp4)
 
 ## What This Implements
 
