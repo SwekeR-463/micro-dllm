@@ -23,7 +23,7 @@ n_head = 6
 n_layer = 6
 head_dim = n_embd // n_head
 
-T = 50  # diffusion steps
+T = 30  # diffusion steps
 
 device = (
     "cuda"
