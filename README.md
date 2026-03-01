@@ -115,3 +115,5 @@ Notes:
 - [ ] Muon Ablations
 - [ ] Train on SynTH/fineweb-edu
 - [ ] Try speed running for a 200M+ param model
+- [ ] Adding training with block based masking
+- [ ] Using uniform diffusion instead of masked diffusion

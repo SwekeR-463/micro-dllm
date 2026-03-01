@@ -23,7 +23,7 @@ n_head = 6
 n_layer = 6
 head_dim = n_embd // n_head
 
-T = 100  # diffusion steps
+T = 50  # diffusion steps
 
 device = (
     "cuda"
@@ -60,7 +60,7 @@ val_data = data[n:]
 # Diffusion Schedule
 def survival_prob(t):
     # cosine schedule (better than linear)
-    return math.cos((t / T) * math.pi / 2)
+    return math.cos((t / T) * math.pi / 2)**2
 
 # Batch Loader
 def get_batch(split):

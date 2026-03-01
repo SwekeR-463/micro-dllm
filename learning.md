@@ -138,3 +138,19 @@ What is simplified vs Mercury-scale training:
 - For diffusion LLMs, iterative denoising can make sampling noise accumulation more visible than one-shot decoding, especially in small models.
 - With less training data, `temperature=1.0` often looks noisy rather than creative, because the model's token probabilities are not sharp/reliable enough to support diverse sampling.
 - But it is not true that diffusion LLMs are inherently noisy: with stronger models, better data, and controlled decoding (`low temperature`, `top-k/top-p`, improved remask policy), outputs can be very clean.
+
+### Q6: How do diffusion steps affect generation? Do steps need to match context length?
+
+- Diffusion steps (`T`) control how many iterative denoising refinements happen during generation.
+- Higher `T` usually gives more opportunities to correct mistakes, but increases latency/cost and can accumulate sampling noise if decoding is too stochastic.
+- Lower `T` is faster, but may under-refine and leave more errors.
+- `T` does **not** need to equal context length (`block_size`); they are different axes:
+  - `block_size` = number of tokens/characters in the sequence window.
+  - `T` = number of denoising iterations applied to that window.
+- Practical rule: choose `T` by quality-vs-speed tradeoff (and training setup), not by sequence length.
+- `T` should be consistent between training assumptions (noise schedule) and inference procedure; large mismatch can hurt quality.
+
+### Q6 Refinements
+
+- `training_steps / T` is a good intuition for timestep coverage, but real coverage also depends on batch size and timestep sampling/weighting; some timesteps can still be undertrained.
+- "Entropy amplification" risk is strongest under stochastic decoding; with greedy or constrained decoding, larger `T` can still improve quality, but usually with diminishing returns and higher inference cost.
