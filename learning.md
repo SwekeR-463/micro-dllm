@@ -71,3 +71,70 @@ What is simplified vs Mercury-scale training:
 - No RLHF/DPO alignment stage in this codebase.
 - Loss is plain cross-entropy over all positions; there is no explicit `gamma(t)` weighting term.
 - Forward corruption is implemented directly from `x0` at sampled `t` (masking), rather than exposing a full formal Markov chain object in code.
+
+## Run 2: Change Done
+
+- Updated training objective from full-sequence CE to **masked-position CE only** (`mask == True`) in `train.py`.
+- Reason: full-sequence loss was dropping too fast(4.3->1.8->0.6->0.7....) because many visible tokens are easy copy targets.
+- Added periodic masked-loss evaluation for both train and validation splits:
+  - `eval step {iter} | train masked loss ... | val masked loss ...`
+- Added a safe fallback to full-sequence CE only for the rare edge case where a batch has zero masked tokens.
+
+### Why the fast loss drop was expected (before objective change)
+
+- This drop was mostly expected in the previous setup, and part of it was "too easy" loss.
+- `step 0 loss 4.3315` is almost exactly the random baseline `ln(vocab_size)`: `ln(76) ~= 4.33`, so initialization and early training behavior were normal.
+- In batch corruption (`train.py`, `get_batch`), `t` is sampled uniformly from `1..100`, and the average masked fraction is about `0.368`, so roughly `63%` of tokens stay visible.
+- Earlier, loss was computed on all positions (`Model.forward` cross-entropy over full sequence), so the model could quickly learn visible-token copying, which made loss fall fast.
+- The dataset is small and repetitive (`~88k` characters of simple stories), so char-level denoising picks up easy patterns quickly.
+
+### Effect of the new objective
+
+- Masked-only CE does not inherently increase randomness.
+- It makes the metric more honest for denoising quality by removing easy visible-token positions from the loss.
+- Generation randomness still mainly comes from inference choices (`temperature`, multinomial sampling, and remask policy).
+
+## Fundamental Q&A (Follow-up)
+
+### Q1: Was the earlier rapid loss drop mainly because of char-level tokenization?
+
+- Partly, but not mainly.
+- Char-level tokenization can lower loss faster because many characters are highly predictable (spaces, common letters, frequent local patterns).
+- The bigger reason for the rapid drop was the earlier full-sequence loss on all positions, where many visible tokens were easy copy targets.
+- Small/repetitive training data also accelerated this effect.
+
+### Q2: If we switch to word-level tokens and keep old full-sequence loss, will it be better?
+
+- Not automatically.
+- Even with word-level masking, full-sequence loss still includes many visible-token positions, so easy-copy domination remains.
+- Word-level vocabularies are larger/sparser and can be harder on small datasets; subword tokenization is usually more stable than pure word-level tokenization.
+- Better direction: keep masked-position-focused objective (or strong masked weighting), then tune tokenizer choice and masking policy.
+
+### Q3: Does masked-only loss increase randomness, or will model still learn over 5k steps?
+
+- Masked-only loss does not make the model inherently more random.
+- It removes easy tokens from the objective, so loss can look higher/harder at first.
+- It usually improves what matters: denoising masked tokens correctly.
+- Randomness in output is mainly controlled by inference settings (`temperature`, multinomial sampling, remask policy), not by this objective change.
+- Over 5k steps, model can learn the denoising behavior, but on small datasets it may plateau early and overfit style patterns.
+- Track `val masked loss` and sample quality, not only train loss.
+
+### Q4: Why was loss reducing so fast before the objective change?
+
+- Short answer: that drop was mostly expected in the previous setup, and part of it was "too easy" loss.
+- `step 0 loss 4.3315` matched random baseline closely: `ln(vocab_size) = ln(76) ~= 4.33`.
+- In corruption (`get_batch`), `t` was uniform in `1..100`, with average masked fraction about `0.368`, so around `63%` tokens were visible.
+- Loss was computed over all positions, so visible-token copying reduced loss quickly.
+- Dataset size/style also mattered: about `~88k` characters of repetitive simple stories.
+- Better metric for true denoising progress: masked-position loss (`mask == True`) plus masked validation loss tracking.
+
+### Q5: Why is `temperature=1.0` random but `temperature=0.0` cleaner and more structured? Is that inherent to diffusion LLMs?
+
+- `temperature` directly controls sampling entropy.
+- At `temperature=1.0`, decoding samples from the full token distribution, so lower-probability tokens are picked more often.
+- In diffusion decoding, this sampling happens across many reverse denoising steps, so randomness can compound over iterations.
+- At `temperature=0.0` (greedy/argmax behavior), each step picks the highest-probability token, so outputs become cleaner and more structured.
+- This behavior is expected and is not a bug.
+- For diffusion LLMs, iterative denoising can make sampling noise accumulation more visible than one-shot decoding, especially in small models.
+- With less training data, `temperature=1.0` often looks noisy rather than creative, because the model's token probabilities are not sharp/reliable enough to support diverse sampling.
+- But it is not true that diffusion LLMs are inherently noisy: with stronger models, better data, and controlled decoding (`low temperature`, `top-k/top-p`, improved remask policy), outputs can be very clean.

@@ -10,12 +10,13 @@ from torch.nn import functional as F
 # Hyperparameters
 batch_size = 64
 block_size = 256
-max_iters = 5000
+max_iters = 10000
 eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
 save_interval = 500
-checkpoint_path = "model.pt"
+checkpoint_path = "model_stories.pt"
+loss_curve_path = "loss_curves.png"
 
 n_embd = 384
 n_head = 6
@@ -33,7 +34,7 @@ device = (
 torch.manual_seed(1337)
 
 # Data
-with open("data.txt", "r", encoding="utf-8") as f:
+with open("stories.txt", "r", encoding="utf-8") as f:
     text = f.read()
 
 chars = sorted(list(set(text)))
@@ -196,12 +197,59 @@ class Model(nn.Module):
 
         loss = None
         if targets is not None:
-            logits_flat = logits.view(B * Tseq, -1)
-            targets_flat = targets.view(B * Tseq)
-            # Train to predict the full clean sequence x0 from noisy xt.
-            loss = F.cross_entropy(logits_flat, targets_flat)
+            # Train denoising only on corrupted positions to avoid easy copy loss.
+            if mask is not None:
+                masked_logits = logits[mask]
+                masked_targets = targets[mask]
+                if masked_targets.numel() > 0:
+                    loss = F.cross_entropy(masked_logits, masked_targets)
+                else:
+                    # Extremely rare edge case when no tokens are masked in batch.
+                    logits_flat = logits.view(B * Tseq, -1)
+                    targets_flat = targets.view(B * Tseq)
+                    loss = F.cross_entropy(logits_flat, targets_flat)
+            else:
+                logits_flat = logits.view(B * Tseq, -1)
+                targets_flat = targets.view(B * Tseq)
+                loss = F.cross_entropy(logits_flat, targets_flat)
 
         return logits, loss
+
+
+@torch.no_grad()
+def estimate_loss(model):
+    model.eval()
+    losses = {}
+    for split in ["train", "val"]:
+        split_losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            xb, yb, mb, tb = get_batch(split)
+            _, loss = model(xb, t=tb, targets=yb, mask=mb)
+            split_losses[k] = loss.item()
+        losses[split] = split_losses.mean().item()
+    model.train()
+    return losses
+
+
+def save_loss_curves(eval_steps, train_losses, val_losses, output_path):
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib is not installed; skipping loss curve plot.")
+        return
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(eval_steps, train_losses, label="train masked loss", marker="o")
+    plt.plot(eval_steps, val_losses, label="val masked loss", marker="o")
+    plt.xlabel("step")
+    plt.ylabel("loss")
+    plt.title("Training and Validation Loss Curves")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    print(f"saved loss curves to {output_path}")
 
 # Reverse Diffusion Sampling
 @torch.no_grad()
@@ -245,9 +293,20 @@ def generate(model, prompt_len=16):
 if __name__ == "__main__":
     model = Model().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    eval_steps = []
+    train_loss_curve = []
+    val_loss_curve = []
 
     for iter in range(max_iters):
         if iter % eval_interval == 0:
+            losses = estimate_loss(model)
+            eval_steps.append(iter)
+            train_loss_curve.append(losses["train"])
+            val_loss_curve.append(losses["val"])
+            print(
+                f"eval step {iter} | train masked loss {losses['train']:.4f} | "
+                f"val masked loss {losses['val']:.4f}"
+            )
             print("Generating sample...")
             print(generate(model))
 
@@ -283,3 +342,4 @@ if __name__ == "__main__":
         checkpoint_path,
     )
     print(f"saved final checkpoint to {checkpoint_path}")
+    save_loss_curves(eval_steps, train_loss_curve, val_loss_curve, loss_curve_path)

@@ -68,6 +68,7 @@ Requirements:
 ## Training
 
 ```bash
+python3 data.py --num-stories 100 --output data.txt
 python3 train.py
 ```
 
@@ -77,20 +78,39 @@ Checkpoints are saved to `model.pt` during training and at the end.
 
 ```bash
 python3 inference.py \
-  --checkpoint model.pt \
-  --prompt "on the verge of loving" \
-  --gen-len 128 \
+  --checkpoint model_stories.pt \
+  --prompt "Once upon a time" \
+  --gen-len 256 \
   --temperature 1.0 \
   --viz-video diffusion_trace.mp4 \
   --trace-every 1 \
   --gif-frame-ms 180
 ```
 
+## TinyStories Dataset Prep
+
+Use `data.py` to stream TinyStories from Hugging Face and build a small local subset for laptop training:
+
+```bash
+python3 data.py \
+  --dataset roneneldan/TinyStories \
+  --split train \
+  --num-stories 100 \
+  --seed 1337 \
+  --output data.txt
+```
+
+Notes:
+
+- `--num-stories 100` or `--num-stories 200` is a good range for quick local runs.
+- Sampling uses streaming + shuffle buffer, so it does not download the full dataset at once.
+- `train.py` and `inference.py` automatically use the generated `data.txt`.
+
 
 ## Practical Next Improvements/Experiments
 
 - [ ] Add resume training from checkpoint (`--resume model.pt`)
-- [ ] Train on 100-200 Tiny Stories
+- [x] Train on 100-200 Tiny Stories
 - [ ] Do loss curve ablations with gpt2 config for arm vs dif on 100-200 tiny stories
 - [ ] Muon Ablations
 - [ ] Train on SynTH/fineweb-edu
