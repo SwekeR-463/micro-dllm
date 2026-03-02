@@ -39,7 +39,7 @@ Training setup:
 - Learning rate: `3e-4`
 - Forward noising: cosine survival schedule  
   `a_t = cos((t / T) * pi / 2)`
-- Objective: predict full clean sequence `x0` from noisy `xt` (cross-entropy over all positions)
+- Objective: predict clean sequence `x0` from noisy `xt` (cross-entropy on masked positions)
 
 Inference setup:
 
@@ -68,20 +68,28 @@ Requirements:
 ## Training
 
 ```bash
-python3 data.py --num-stories 100 --output data.txt
+python3 data.py --num-stories 10000 --output stories.txt
 python3 train.py
 ```
 
 Checkpoints are saved to `model.pt` during training and at the end.
 
+At the end of training, `train.py` also prints a final validation metrics block with:
+
+- `Perplexity` (derived from masked validation cross-entropy)
+- `Masked reconstruction accuracy` (accuracy on corrupted positions only)
+- `Entropy per timestep` (masked-token predictive entropy across diffusion timesteps)
+- `Reverse-step token change rate` (fraction of generated tokens that change between reverse steps)
+- `Distinct-2 diversity` (unique generated bigrams / total generated bigrams, prompt excluded)
+
 ## Inference + Visualizer
 
 ```bash
 python3 inference.py \
-  --checkpoint model_stories_2000.pt \
+  --checkpoint model_stories_10k.pt \
   --prompt "Once upon a time" \
   --gen-len 256 \
-  --temperature 1.0 \
+  --temperature 0.0 \
   --viz-video diffusion_trace.mp4 \
   --trace-every 1 \
   --gif-frame-ms 180
@@ -95,7 +103,7 @@ Use `data.py` to stream TinyStories from Hugging Face and build a small local su
 python3 data.py \
   --dataset roneneldan/TinyStories \
   --split train \
-  --num-stories 100 \
+  --num-stories 10000 \
   --seed 1337 \
   --output data.txt
 ```

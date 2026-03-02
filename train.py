@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-
 # Hyperparameters
 batch_size = 64
 block_size = 256
@@ -15,7 +14,7 @@ eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
 save_interval = 500
-checkpoint_path = "model_stories_2000.pt"
+checkpoint_path = "model_stories_10k.pt"
 loss_curve_path = "loss_curves.png"
 
 n_embd = 384
@@ -83,6 +82,27 @@ def get_batch(split):
         xt.to(device),
         x0.to(device),
         mask.to(device),
+        t.to(device),
+    )
+
+
+def get_batch_at_t(split, t_value):
+    data_split = train_data if split == "train" else val_data
+    idx = torch.randint(len(data_split) - block_size, (batch_size,))
+    x0 = torch.stack([data_split[i : i + block_size] for i in idx])
+
+    t_value = int(t_value)
+    t = torch.full((batch_size,), t_value, dtype=torch.long)
+    a_t = survival_prob(t_value)
+
+    token_mask = torch.rand(batch_size, block_size) > a_t
+    xt = x0.clone()
+    xt[token_mask] = mask_token_id
+
+    return (
+        xt.to(device),
+        x0.to(device),
+        token_mask.to(device),
         t.to(device),
     )
 
@@ -251,6 +271,170 @@ def save_loss_curves(eval_steps, train_losses, val_losses, output_path):
     plt.close()
     print(f"saved loss curves to {output_path}")
 
+
+@torch.no_grad()
+def evaluate_masked_metrics(model, split="val", num_batches=eval_iters):
+    model.eval()
+    total_loss = 0.0
+    total_correct = 0
+    total_masked = 0
+
+    for _ in range(num_batches):
+        xb, yb, mb, tb = get_batch(split)
+        logits, loss = model(xb, t=tb, targets=yb, mask=mb)
+        total_loss += loss.item()
+
+        pred = torch.argmax(logits, dim=-1)
+        total_correct += (pred[mb] == yb[mb]).sum().item()
+        total_masked += mb.sum().item()
+
+    avg_loss = total_loss / max(1, num_batches)
+    masked_acc = total_correct / max(1, total_masked)
+    perplexity = math.exp(avg_loss)
+
+    model.train()
+    return {
+        "masked_loss": avg_loss,
+        "masked_recon_acc": masked_acc,
+        "perplexity": perplexity,
+    }
+
+
+@torch.no_grad()
+def evaluate_entropy_per_timestep(model, split="val", batches_per_t=2):
+    model.eval()
+    entropies = []
+
+    for t_value in range(1, T + 1):
+        entropy_sum = 0.0
+        entropy_count = 0
+        for _ in range(batches_per_t):
+            xb, _, mb, tb = get_batch_at_t(split, t_value)
+            logits, _ = model(xb, t=tb)
+            log_probs = F.log_softmax(logits, dim=-1)
+            probs = log_probs.exp()
+            token_entropy = -(probs * log_probs).sum(dim=-1)
+            masked_entropy = token_entropy[mb]
+            entropy_sum += masked_entropy.sum().item()
+            entropy_count += masked_entropy.numel()
+        entropies.append(entropy_sum / max(1, entropy_count))
+
+    model.train()
+    return entropies
+
+
+@torch.no_grad()
+def generate_with_trace(model, prompt_tokens, gen_len=128, temperature=0.0):
+    model.eval()
+
+    if len(prompt_tokens) == 0:
+        raise ValueError("prompt_tokens cannot be empty")
+    if len(prompt_tokens) >= block_size:
+        raise ValueError("prompt_tokens length must be < block_size")
+
+    max_gen = block_size - len(prompt_tokens)
+    gen_len = max(1, min(gen_len, max_gen))
+    total_len = len(prompt_tokens) + gen_len
+    gen_slice = slice(len(prompt_tokens), total_len)
+
+    x = torch.full((1, block_size), mask_token_id, device=device)
+    x[0, : len(prompt_tokens)] = torch.tensor(prompt_tokens, device=device)
+
+    fixed_mask = torch.ones((1, block_size), dtype=torch.bool, device=device)
+    fixed_mask[:, gen_slice] = False
+
+    states = [x[0, gen_slice].clone()]
+
+    for t in reversed(range(1, T + 1)):
+        t_tensor = torch.tensor([t], device=device)
+        logits, _ = model(x, t=t_tensor)
+
+        if temperature <= 0:
+            sampled = torch.argmax(logits, dim=-1)
+            probs = F.softmax(logits, dim=-1)
+            sampled_conf = probs.gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+        else:
+            probs = F.softmax(logits / temperature, dim=-1)
+            sampled = torch.multinomial(probs.view(-1, vocab_size), 1).view(1, block_size)
+            sampled_conf = probs.gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+
+        x = torch.where(fixed_mask, x, sampled)
+
+        if t > 1:
+            gen_positions = total_len - len(prompt_tokens)
+            next_mask_ratio = 1.0 - survival_prob(t - 1)
+            k = int(next_mask_ratio * gen_positions)
+            if k > 0:
+                conf = sampled_conf[:, gen_slice]
+                low_conf_idx_local = torch.topk(conf, k=k, dim=1, largest=False).indices
+                low_conf_idx = low_conf_idx_local + len(prompt_tokens)
+                x.scatter_(1, low_conf_idx, mask_token_id)
+
+        states.append(x[0, gen_slice].clone())
+
+    t0 = torch.tensor([0], device=device)
+    logits, _ = model(x, t=t0)
+    final_tokens = torch.argmax(logits, dim=-1)
+    x[:, gen_slice] = final_tokens[:, gen_slice]
+    states.append(x[0, gen_slice].clone())
+
+    change_rates = []
+    for prev_state, next_state in zip(states[:-1], states[1:]):
+        change_rate = (next_state != prev_state).float().mean().item()
+        change_rates.append(change_rate)
+
+    model.train()
+    return x[0, gen_slice].tolist(), change_rates
+
+
+@torch.no_grad()
+def evaluate_generation_metrics(
+    model,
+    split="val",
+    num_samples=16,
+    prompt_len=32,
+    gen_len=128,
+    temperature=0.0,
+):
+    data_split = train_data if split == "train" else val_data
+    needed = prompt_len + gen_len + 1
+    if len(data_split) <= needed:
+        raise ValueError(
+            f"Not enough data for generation metrics: need > {needed}, got {len(data_split)}"
+        )
+
+    all_change_rates = []
+    total_bigrams = 0
+    unique_bigrams = set()
+
+    for _ in range(num_samples):
+        max_start = len(data_split) - needed
+        start = torch.randint(max_start + 1, (1,)).item()
+        prompt_tokens = data_split[start : start + prompt_len].tolist()
+
+        gen_tokens, change_rates = generate_with_trace(
+            model,
+            prompt_tokens=prompt_tokens,
+            gen_len=gen_len,
+            temperature=temperature,
+        )
+
+        all_change_rates.extend(change_rates)
+
+        if len(gen_tokens) >= 2:
+            for i in range(len(gen_tokens) - 1):
+                bg = (gen_tokens[i], gen_tokens[i + 1])
+                unique_bigrams.add(bg)
+                total_bigrams += 1
+
+    distinct_2 = len(unique_bigrams) / max(1, total_bigrams)
+    avg_change_rate = sum(all_change_rates) / max(1, len(all_change_rates))
+
+    return {
+        "reverse_step_token_change_rate": avg_change_rate,
+        "distinct_2": distinct_2,
+    }
+
 # Reverse Diffusion Sampling
 @torch.no_grad()
 def generate(model, prompt_len=16):
@@ -343,3 +527,33 @@ if __name__ == "__main__":
     )
     print(f"saved final checkpoint to {checkpoint_path}")
     save_loss_curves(eval_steps, train_loss_curve, val_loss_curve, loss_curve_path)
+
+    final_core = evaluate_masked_metrics(model, split="val", num_batches=eval_iters)
+    entropy_by_t = evaluate_entropy_per_timestep(model, split="val", batches_per_t=2)
+    final_gen = evaluate_generation_metrics(
+        model,
+        split="val",
+        num_samples=16,
+        prompt_len=32,
+        gen_len=128,
+        temperature=0.0,
+    )
+
+    entropy_mean = sum(entropy_by_t) / max(1, len(entropy_by_t))
+    entropy_t1 = entropy_by_t[0]
+    entropy_tmid = entropy_by_t[(len(entropy_by_t) - 1) // 2]
+    entropy_tT = entropy_by_t[-1]
+
+    print("\n=== Final Evaluation Metrics (val) ===")
+    print(f"Perplexity: {final_core['perplexity']:.4f}")
+    print(f"Masked reconstruction accuracy: {final_core['masked_recon_acc']:.4f}")
+    print(
+        "Entropy per timestep (masked positions): "
+        f"mean={entropy_mean:.4f}, t=1:{entropy_t1:.4f}, "
+        f"t={1 + (T - 1) // 2}:{entropy_tmid:.4f}, t={T}:{entropy_tT:.4f}"
+    )
+    print(
+        "Reverse-step token change rate: "
+        f"{final_gen['reverse_step_token_change_rate']:.4f}"
+    )
+    print(f"Distinct-2 diversity (generated region): {final_gen['distinct_2']:.4f}")
