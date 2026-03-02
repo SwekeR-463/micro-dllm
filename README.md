@@ -49,6 +49,14 @@ Inference setup:
 - Final explicit denoise at `t=0` with greedy selection
 - Visualization outputs: MP4 timeline of decoding steps
 
+At the end of training, also prints a final validation metrics block with:
+
+- `Perplexity` (derived from masked validation cross-entropy)
+- `Masked reconstruction accuracy` (accuracy on corrupted positions only)
+- `Entropy per timestep` (masked-token predictive entropy across diffusion timesteps)
+- `Reverse-step token change rate` (fraction of generated tokens that change between reverse steps)
+- `Distinct-2 diversity` (unique generated bigrams / total generated bigrams, prompt excluded)
+
 
 ## Project Files
 
