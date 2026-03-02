@@ -15,7 +15,7 @@ eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
 save_interval = 500
-checkpoint_path = "model_stories.pt"
+checkpoint_path = "model_stories_2000.pt"
 loss_curve_path = "loss_curves.png"
 
 n_embd = 384
@@ -23,7 +23,7 @@ n_head = 6
 n_layer = 6
 head_dim = n_embd // n_head
 
-T = 30  # diffusion steps
+T = 100  # diffusion steps
 
 device = (
     "cuda"

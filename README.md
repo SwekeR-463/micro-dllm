@@ -78,7 +78,7 @@ Checkpoints are saved to `model.pt` during training and at the end.
 
 ```bash
 python3 inference.py \
-  --checkpoint model_stories.pt \
+  --checkpoint model_stories_2000.pt \
   --prompt "Once upon a time" \
   --gen-len 256 \
   --temperature 1.0 \
@@ -111,6 +111,7 @@ Notes:
 
 - [ ] Add resume training from checkpoint (`--resume model.pt`)
 - [x] Train on 100-200 Tiny Stories
+- [x] Train on 2k+ Stories
 - [ ] Do loss curve ablations with gpt2 config for arm vs dif on 100-200 tiny stories
 - [ ] Muon Ablations
 - [ ] Train on SynTH/fineweb-edu

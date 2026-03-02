@@ -94,6 +94,25 @@ What is simplified vs Mercury-scale training:
 - It makes the metric more honest for denoising quality by removing easy visible-token positions from the loss.
 - Generation randomness still mainly comes from inference choices (`temperature`, multinomial sampling, and remask policy).
 
+## Experiments with Diffusion Steps (T)
+
+Setup and observed train loss:
+
+- `T=30` -> train loss ~`2.0`
+- `T=50` -> train loss ~`2.0`
+- `T=100` -> train loss ~`1.8`
+
+Condensed takeaway:
+
+- Increasing `T` samples a wider range of noise levels in the objective `E_t E_{x_t}[-log p_theta(x0 | x_t, t)]`.
+- Higher `T` includes more heavily masked cases, which can make optimization smoother and reduce average training loss.
+- Lower training loss here mainly reflects objective smoothing across noise regimes, not guaranteed better generation quality.
+- With fixed training budget, higher `T` means fewer updates per timestep and a longer reverse chain, which can reduce sampling stability.
+- Practical tradeoff: higher `T` improves objective smoothness; lower/moderate `T` can improve reverse-process robustness and speed.
+
+one-liner:
+- Increasing diffusion steps (`T`) can lower training loss by smoothing denoising across a broader noise spectrum, while hurting reverse-process stability under limited timestep coverage.
+
 ## Fundamental Q&A (Follow-up)
 
 ### Q1: Was the earlier rapid loss drop mainly because of char-level tokenization?
