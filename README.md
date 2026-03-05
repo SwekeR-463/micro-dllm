@@ -1,6 +1,6 @@
 # micro-dllm
 
-This repo trains a micro-dLLM(~10.7M) based on [mercury's training and inference](https://arxiv.org/abs/2506.17298) approach with BPE tokens and generates text with iterative denoising.
+This repo trains a micro-dLLM(~12.23M) based on [mercury's training and inference](https://arxiv.org/abs/2506.17298) approach with BPE tokens and generates text with iterative denoising.
 
 
 [![Diffusion Trace](./artifacts/media/diffusion_trace.gif)](./artifacts/media/diffusion_trace.mp4)
