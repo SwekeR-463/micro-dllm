@@ -5,6 +5,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from utils.tokenizer_utils import load_tokenizer
 
 # Hyperparameters
 batch_size = 64
@@ -14,8 +15,8 @@ eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
 save_interval = 500
-checkpoint_path = "model_stories_10k.pt"
-loss_curve_path = "loss_curves.png"
+checkpoint_path = "artifacts/models/model_stories_10k_bpe_256.pt"
+loss_curve_path = "artifacts/media/loss_curves.png"
 
 n_embd = 384
 n_head = 6
@@ -23,6 +24,8 @@ n_layer = 6
 head_dim = n_embd // n_head
 
 T = 100  # diffusion steps
+tokenizer_path = "artifacts/tokenizer/tokenizer.json"
+stories_path = "data/stories.txt"
 
 device = (
     "cuda"
@@ -33,23 +36,21 @@ device = (
 torch.manual_seed(1337)
 
 # Data
-with open("stories.txt", "r", encoding="utf-8") as f:
+with open(stories_path, "r", encoding="utf-8") as f:
     text = f.read()
 
-chars = sorted(list(set(text)))
-chars = ["_"] + chars  # "_" is MASK
-vocab_size = len(chars)
+tokenizer = load_tokenizer(tokenizer_path)
+vocab_size = tokenizer.get_vocab_size()
 
-stoi = {ch: i for i, ch in enumerate(chars)}
-itos = {i: ch for i, ch in enumerate(chars)}
-
-mask_token_id = stoi["_"]
+mask_token_id = tokenizer.token_to_id("[MASK]")
+if mask_token_id is None:
+    raise ValueError("Tokenizer is missing [MASK] token. Re-train tokenizer.")
 
 def encode(s):
-    return [stoi[ch] for ch in s]
+    return tokenizer.encode(s).ids
 
 def decode(l):
-    return "".join([itos[i] for i in l])
+    return tokenizer.decode(l, skip_special_tokens=False)
 
 data = torch.tensor(encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
@@ -475,6 +476,9 @@ def generate(model, prompt_len=16):
 
 # Training
 if __name__ == "__main__":
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+    os.makedirs(os.path.dirname(loss_curve_path), exist_ok=True)
+
     model = Model().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     eval_steps = []

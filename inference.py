@@ -9,6 +9,23 @@ from PIL import Image, ImageDraw, ImageFont
 import train as tr
 
 
+def build_mask_char_flags(text: str) -> list[bool]:
+    flags = [False] * len(text)
+    mask_token = "[MASK]"
+    start = 0
+    while True:
+        idx = text.find(mask_token, start)
+        if idx == -1:
+            break
+        for j in range(idx, min(len(text), idx + len(mask_token))):
+            flags[j] = True
+        start = idx + len(mask_token)
+    for i, ch in enumerate(text):
+        if ch == "_":
+            flags[i] = True
+    return flags
+
+
 def load_model(checkpoint_path: str) -> tr.Model:
     ckpt = torch.load(checkpoint_path, map_location=tr.device)
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
@@ -52,6 +69,7 @@ def write_diffusion_gif(
         )
 
         text = item["text"]
+        mask_flags = build_mask_char_flags(text)
         for i, ch in enumerate(text):
             row = i // chars_per_line
             col = i % chars_per_line
@@ -59,12 +77,12 @@ def write_diffusion_gif(
             y = header_h + row * line_h
 
             if i < prompt_len:
-                draw.text((x, y), ch, fill="#0f766e", font=font)
-            elif ch == "_":
-                draw.rectangle([x - 1, y - 1, x + char_w, y + line_h - 4], fill="#fef08a")
-                draw.text((x, y), ch, fill="#713f12", font=font)
+                draw.text((x, y), ch, fill="#2563eb", font=font)
+            elif mask_flags[i]:
+                draw.rectangle([x - 1, y - 1, x + char_w, y + line_h - 4], fill="#fde68a")
+                draw.text((x, y), ch, fill="#92400e", font=font)
             else:
-                draw.text((x, y), ch, fill="#111827", font=font)
+                draw.text((x, y), ch, fill="#000000", font=font)
 
         frames.append(im)
 
@@ -201,6 +219,7 @@ def write_diffusion_video(
             max_chars_total = max_chars * max_lines
             if len(text) > max_chars_total:
                 text = text[: max_chars_total - 3] + "..."
+            mask_flags = build_mask_char_flags(text)
 
             # Token grid
             for i, ch in enumerate(text):
@@ -210,16 +229,16 @@ def write_diffusion_video(
                 y = text_top + inner_pad + row * line_h
 
                 if i < prompt_len:
-                    draw.text((x, y), ch, fill=(45, 212, 191), font=font_mono)
-                elif ch == "_":
+                    draw.text((x, y), ch, fill=(37, 99, 235), font=font_mono)
+                elif mask_flags[i]:
                     draw.rounded_rectangle(
                         [x - 2, y - 2, x + char_w + 2, y + line_h - 6],
                         radius=4,
-                        fill=(252, 214, 139),
+                        fill=(253, 230, 138),
                     )
-                    draw.text((x, y), ch, fill=(70, 60, 40), font=font_mono)
+                    draw.text((x, y), ch, fill=(146, 64, 14), font=font_mono)
                 else:
-                    draw.text((x, y), ch, fill=(30, 30, 30), font=font_mono)
+                    draw.text((x, y), ch, fill=(0, 0, 0), font=font_mono)
 
             # Mask-count mini chart
             chart_pad = 18
@@ -282,7 +301,7 @@ def generate_from_prompt(
     if len(prompt_tokens) == 0:
         raise ValueError("Prompt cannot be empty.")
     if len(prompt_tokens) >= tr.block_size:
-        raise ValueError(f"Prompt too long. Max length is {tr.block_size - 1} chars.")
+        raise ValueError(f"Prompt too long. Max length is {tr.block_size - 1} tokens.")
 
     max_gen = tr.block_size - len(prompt_tokens)
     gen_len = max(1, min(gen_len, max_gen))
@@ -355,12 +374,17 @@ def generate_from_prompt(
             }
         )
 
-    return output, trace, len(prompt_tokens)
+    prompt_prefix = tr.decode(prompt_tokens)
+    return output, trace, len(prompt_prefix)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=str, default="model.pt")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default="artifacts/models/model_stories_10k_bpe_256.pt",
+    )
     parser.add_argument("--prompt", type=str, required=True)
     parser.add_argument("--gen-len", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -375,15 +399,6 @@ def main():
         raise ValueError("Provide at least one output: --viz-video and/or --viz-gif")
 
     torch.manual_seed(args.seed)
-
-    try:
-        _ = tr.encode(args.prompt)
-    except KeyError as e:
-        ch = e.args[0]
-        raise ValueError(
-            f"Prompt contains out-of-vocabulary char {repr(ch)}. "
-            "Use only characters present in data.txt."
-        ) from e
 
     model = load_model(args.checkpoint)
     out, trace, prompt_len = generate_from_prompt(
