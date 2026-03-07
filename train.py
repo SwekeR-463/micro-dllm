@@ -10,7 +10,7 @@ from utils.tokenizer_utils import load_tokenizer
 # Hyperparameters
 batch_size = 64
 block_size = 256
-max_iters = 10000
+max_iters = 20000
 eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
