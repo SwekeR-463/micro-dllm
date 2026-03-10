@@ -1,0 +1,19 @@
+{
+  "T": 100,
+  "batch_size": 64,
+  "block_size": 256,
+  "device": "cuda",
+  "eval_interval": 500,
+  "eval_iters": 200,
+  "learning_rate": 0.0003,
+  "max_iters": 10000,
+  "n_embd": 384,
+  "n_head": 6,
+  "n_layer": 6,
+  "optimizer": "singledevicemuonwithauxadam",
+  "run_id": "20260309_173223_singledevicemuonwithauxadam_bs64_seed1337",
+  "save_interval": 500,
+  "seed": 1337,
+  "stories_path": "data/stories.txt",
+  "tokenizer_path": "artifacts/tokenizer/tokenizer.json"
+}

@@ -1,0 +1,24 @@
+{
+  "best_val_masked_loss": 5.973825454711914,
+  "best_val_step": 8500,
+  "distinct_2": 0.0004921259842519685,
+  "entropy_per_timestep_mean": 6.000507991224846,
+  "entropy_t1": 6.05266227722168,
+  "entropy_tT": 5.975555419921875,
+  "entropy_tmid": 5.981610920123234,
+  "final_step": 9999,
+  "final_val_masked_loss": 5.974681885242462,
+  "final_val_masked_recon_acc": 0.06416737879324247,
+  "final_val_perplexity": 393.3429529883029,
+  "optimizer": "sgd",
+  "paths": {
+    "checkpoint": "artifacts/runs/20260309_153303_sgd_bs64_seed1337/checkpoints/model.pt",
+    "config": "artifacts/runs/20260309_153303_sgd_bs64_seed1337/config.json",
+    "eval_log": "artifacts/runs/20260309_153303_sgd_bs64_seed1337/eval_log.jsonl",
+    "loss_curve": "artifacts/runs/20260309_153303_sgd_bs64_seed1337/media/loss_curves.png",
+    "train_log": "artifacts/runs/20260309_153303_sgd_bs64_seed1337/train_log.jsonl"
+  },
+  "reverse_step_token_change_rate": 0.6484423344678217,
+  "run_id": "20260309_153303_sgd_bs64_seed1337",
+  "total_time_s": 5564.185671329498
+}

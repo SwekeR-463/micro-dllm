@@ -1,0 +1,24 @@
+{
+  "best_val_masked_loss": 3.8967223167419434,
+  "best_val_step": 9500,
+  "distinct_2": 0.5024606299212598,
+  "entropy_per_timestep_mean": 2.7722773236677547,
+  "entropy_t1": 0.8531832426786423,
+  "entropy_tT": 5.963330268859863,
+  "entropy_tmid": 2.1739666694845208,
+  "final_step": 9999,
+  "final_val_masked_loss": 3.905805608034134,
+  "final_val_masked_recon_acc": 0.3069547980043168,
+  "final_val_perplexity": 49.69009453133499,
+  "optimizer": "adamw",
+  "paths": {
+    "checkpoint": "artifacts/runs/20260308_165232_adamw_bs64_seed1337/checkpoints/model.pt",
+    "config": "artifacts/runs/20260308_165232_adamw_bs64_seed1337/config.json",
+    "eval_log": "artifacts/runs/20260308_165232_adamw_bs64_seed1337/eval_log.jsonl",
+    "loss_curve": "artifacts/runs/20260308_165232_adamw_bs64_seed1337/media/loss_curves.png",
+    "train_log": "artifacts/runs/20260308_165232_adamw_bs64_seed1337/train_log.jsonl"
+  },
+  "reverse_step_token_change_rate": 0.17859491027227722,
+  "run_id": "20260308_165232_adamw_bs64_seed1337",
+  "total_time_s": 5593.2418665885925
+}

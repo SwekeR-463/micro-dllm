@@ -79,7 +79,12 @@ python3 scripts/train_tokenizer.py --input data/stories.txt --output artifacts/t
 python3 train.py
 ```
 
-Checkpoints are saved to `artifacts/models/` during training and at the end.
+Each run writes artifacts to `artifacts/runs/<run_id>/`:
+- `checkpoints/model.pt`
+- `train_log.jsonl` (per-step metrics)
+- `eval_log.jsonl` (periodic train/val losses)
+- `final_metrics.json` (final + best summary)
+- `media/loss_curves.png`
 
 At the end of training, `train.py` also prints a final validation metrics block with:
 
@@ -93,7 +98,7 @@ At the end of training, `train.py` also prints a final validation metrics block 
 
 ```bash
 python3 inference.py \
-  --checkpoint artifacts/models/model_stories_10k_bpe_256.pt \
+  --checkpoint artifacts/runs/20260308_182929_adam_bs64_seed1337/checkpoints/model.pt \
   --prompt "Once upon a time" \
   --gen-len 256 \
   --temperature 0.0 \

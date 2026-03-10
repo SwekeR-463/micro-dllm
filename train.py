@@ -2,6 +2,9 @@ import os
 import sys
 import time
 import math
+import json
+from datetime import datetime
+from muon import SingleDeviceMuonWithAuxAdam
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -10,13 +13,11 @@ from utils.tokenizer_utils import load_tokenizer
 # Hyperparameters
 batch_size = 64
 block_size = 256
-max_iters = 20000
+max_iters = 10000
 eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
 save_interval = 500
-checkpoint_path = "artifacts/models/model_stories_10k_bpe_256.pt"
-loss_curve_path = "artifacts/media/loss_curves.png"
 
 n_embd = 384
 n_head = 6
@@ -33,7 +34,8 @@ device = (
     else ("mps" if torch.backends.mps.is_available() else "cpu")
 )
 
-torch.manual_seed(1337)
+seed = 1337
+torch.manual_seed(seed)
 
 # Data
 with open(stories_path, "r", encoding="utf-8") as f:
@@ -56,6 +58,21 @@ data = torch.tensor(encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
 train_data = data[:n]
 val_data = data[n:]
+
+
+def compute_grad_norm(model):
+    total_sq = 0.0
+    for param in model.parameters():
+        if param.grad is None:
+            continue
+        grad = param.grad.detach()
+        total_sq += grad.pow(2).sum().item()
+    return math.sqrt(total_sq)
+
+
+def append_jsonl(path, payload):
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, sort_keys=True) + "\n")
 
 # Diffusion Schedule
 def survival_prob(t):
@@ -476,14 +493,66 @@ def generate(model, prompt_len=16):
 
 # Training
 if __name__ == "__main__":
-    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-    os.makedirs(os.path.dirname(loss_curve_path), exist_ok=True)
-
     model = Model().to(device)
+    #hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
+    #hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
+    #nonhidden_params = [
+    #    *model.lm_head.parameters(),
+    #    *model.token_emb.parameters(),
+    #    *model.timestep_emb.parameters(),
+    #]
+    #param_groups = [
+    #    dict(params=hidden_weights, use_muon=True,
+    #        lr=0.02, weight_decay=0.01),
+    #    dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
+    #        lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
+    #]
+    #optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer_name = optimizer.__class__.__name__.lower()
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = f"{run_ts}_{optimizer_name}_bs{batch_size}_seed{seed}"
+    run_dir = os.path.join("artifacts", "runs", run_id)
+    checkpoint_dir = os.path.join(run_dir, "checkpoints")
+    media_dir = os.path.join(run_dir, "media")
+
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(media_dir, exist_ok=True)
+
+    run_checkpoint_path = os.path.join(checkpoint_dir, "model.pt")
+    run_loss_curve_path = os.path.join(media_dir, "loss_curves.png")
+    config_path = os.path.join(run_dir, "config.json")
+    train_log_path = os.path.join(run_dir, "train_log.jsonl")
+    eval_log_path = os.path.join(run_dir, "eval_log.jsonl")
+    final_metrics_path = os.path.join(run_dir, "final_metrics.json")
+
+    config = {
+        "run_id": run_id,
+        "optimizer": optimizer_name,
+        "learning_rate": learning_rate,
+        "batch_size": batch_size,
+        "block_size": block_size,
+        "max_iters": max_iters,
+        "eval_interval": eval_interval,
+        "eval_iters": eval_iters,
+        "save_interval": save_interval,
+        "seed": seed,
+        "device": device,
+        "stories_path": stories_path,
+        "tokenizer_path": tokenizer_path,
+        "n_embd": n_embd,
+        "n_head": n_head,
+        "n_layer": n_layer,
+        "T": T,
+    }
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, sort_keys=True)
+    print(f"run directory: {run_dir}")
+
     eval_steps = []
     train_loss_curve = []
     val_loss_curve = []
+    start_time = time.time()
 
     for iter in range(max_iters):
         if iter % eval_interval == 0:
@@ -491,6 +560,14 @@ if __name__ == "__main__":
             eval_steps.append(iter)
             train_loss_curve.append(losses["train"])
             val_loss_curve.append(losses["val"])
+            eval_log = {
+                "step": iter,
+                "time_s": time.time() - start_time,
+                "tokens_seen": iter * batch_size * block_size,
+                "train_masked_loss": losses["train"],
+                "val_masked_loss": losses["val"],
+            }
+            append_jsonl(eval_log_path, eval_log)
             print(
                 f"eval step {iter} | train masked loss {losses['train']:.4f} | "
                 f"val masked loss {losses['val']:.4f}"
@@ -503,7 +580,18 @@ if __name__ == "__main__":
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = compute_grad_norm(model)
         optimizer.step()
+
+        train_log = {
+            "step": iter,
+            "loss": loss.item(),
+            "perplexity": math.exp(loss.item()),
+            "grad_norm": grad_norm,
+            "time_s": time.time() - start_time,
+            "tokens_seen": (iter + 1) * batch_size * block_size,
+        }
+        append_jsonl(train_log_path, train_log)
 
         if iter > 0 and iter % save_interval == 0:
             torch.save(
@@ -513,9 +601,9 @@ if __name__ == "__main__":
                     "optimizer_state_dict": optimizer.state_dict(),
                     "loss": loss.item(),
                 },
-                checkpoint_path,
+                run_checkpoint_path,
             )
-            print(f"saved checkpoint to {checkpoint_path} at step {iter}")
+            print(f"saved checkpoint to {run_checkpoint_path} at step {iter}")
 
         if iter % 100 == 0:
             print(f"step {iter} | loss {loss.item():.4f}")
@@ -527,10 +615,10 @@ if __name__ == "__main__":
             "optimizer_state_dict": optimizer.state_dict(),
             "loss": loss.item(),
         },
-        checkpoint_path,
+        run_checkpoint_path,
     )
-    print(f"saved final checkpoint to {checkpoint_path}")
-    save_loss_curves(eval_steps, train_loss_curve, val_loss_curve, loss_curve_path)
+    print(f"saved final checkpoint to {run_checkpoint_path}")
+    save_loss_curves(eval_steps, train_loss_curve, val_loss_curve, run_loss_curve_path)
 
     final_core = evaluate_masked_metrics(model, split="val", num_batches=eval_iters)
     entropy_by_t = evaluate_entropy_per_timestep(model, split="val", batches_per_t=2)
@@ -561,3 +649,39 @@ if __name__ == "__main__":
         f"{final_gen['reverse_step_token_change_rate']:.4f}"
     )
     print(f"Distinct-2 diversity (generated region): {final_gen['distinct_2']:.4f}")
+
+    if val_loss_curve:
+        best_idx = min(range(len(val_loss_curve)), key=val_loss_curve.__getitem__)
+        best_val_loss = val_loss_curve[best_idx]
+        best_val_step = eval_steps[best_idx]
+    else:
+        best_val_loss = None
+        best_val_step = None
+
+    final_metrics = {
+        "run_id": run_id,
+        "optimizer": optimizer_name,
+        "final_step": max_iters - 1,
+        "total_time_s": time.time() - start_time,
+        "final_val_masked_loss": final_core["masked_loss"],
+        "final_val_perplexity": final_core["perplexity"],
+        "final_val_masked_recon_acc": final_core["masked_recon_acc"],
+        "entropy_per_timestep_mean": entropy_mean,
+        "entropy_t1": entropy_t1,
+        "entropy_tmid": entropy_tmid,
+        "entropy_tT": entropy_tT,
+        "reverse_step_token_change_rate": final_gen["reverse_step_token_change_rate"],
+        "distinct_2": final_gen["distinct_2"],
+        "best_val_masked_loss": best_val_loss,
+        "best_val_step": best_val_step,
+        "paths": {
+            "train_log": train_log_path,
+            "eval_log": eval_log_path,
+            "checkpoint": run_checkpoint_path,
+            "loss_curve": run_loss_curve_path,
+            "config": config_path,
+        },
+    }
+    with open(final_metrics_path, "w", encoding="utf-8") as f:
+        json.dump(final_metrics, f, indent=2, sort_keys=True)
+    print(f"saved final metrics to {final_metrics_path}")
