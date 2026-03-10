@@ -76,6 +76,8 @@ def get_batch(split):
     for i in range(batch_size):
         a_t = survival_prob(t[i].item())
         token_mask = torch.rand(block_size) > a_t
+        if not token_mask.any():
+            token_mask[torch.randint(block_size, (1,)).item()] = True
         xt[i][token_mask] = mask_token_id
         mask[i] = token_mask
 
@@ -97,6 +99,11 @@ def get_batch_at_t(split, t_value):
     a_t = survival_prob(t_value)
 
     token_mask = torch.rand(batch_size, block_size) > a_t
+    empty_rows = ~token_mask.any(dim=1)
+    if empty_rows.any():
+        row_ids = empty_rows.nonzero(as_tuple=False).flatten()
+        rand_cols = torch.randint(block_size, (row_ids.numel(),))
+        token_mask[row_ids, rand_cols] = True
     xt = x0.clone()
     xt[token_mask] = mask_token_id
 
@@ -218,21 +225,12 @@ class Model(nn.Module):
 
         loss = None
         if targets is not None:
-            # Train denoising only on corrupted positions to avoid easy copy loss.
-            if mask is not None:
-                masked_logits = logits[mask]
-                masked_targets = targets[mask]
-                if masked_targets.numel() > 0:
-                    loss = F.cross_entropy(masked_logits, masked_targets)
-                else:
-                    # Extremely rare edge case when no tokens are masked in batch.
-                    logits_flat = logits.view(B * Tseq, -1)
-                    targets_flat = targets.view(B * Tseq)
-                    loss = F.cross_entropy(logits_flat, targets_flat)
-            else:
-                logits_flat = logits.view(B * Tseq, -1)
-                targets_flat = targets.view(B * Tseq)
-                loss = F.cross_entropy(logits_flat, targets_flat)
+            # MDLM objective: CE only on tokens masked at timestep t.
+            if mask is None:
+                raise ValueError("mask is required when targets are provided.")
+            masked_logits = logits[mask]
+            masked_targets = targets[mask]
+            loss = F.cross_entropy(masked_logits, masked_targets)
 
         return logits, loss
 
