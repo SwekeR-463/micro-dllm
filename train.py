@@ -15,8 +15,9 @@ eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
 save_interval = 500
-checkpoint_path = "artifacts/models/model_stories_10k_bpe_256.pt"
-loss_curve_path = "artifacts/media/loss_curves.png"
+loss_curve_every = 1
+checkpoint_path = "artifacts/models/model_stories_10k_256_adamw.pt"
+loss_curve_path = "artifacts/media/new_loss_curves_adamw.png"
 
 n_embd = 384
 n_head = 6
@@ -258,8 +259,8 @@ def save_loss_curves(eval_steps, train_losses, val_losses, output_path):
         return
 
     plt.figure(figsize=(8, 5))
-    plt.plot(eval_steps, train_losses, label="train masked loss", marker="o")
-    plt.plot(eval_steps, val_losses, label="val masked loss", marker="o")
+    plt.plot(eval_steps, train_losses, label="train masked loss", linewidth=1.2)
+    plt.plot(eval_steps, val_losses, label="val masked loss", linewidth=1.2)
     plt.xlabel("step")
     plt.ylabel("loss")
     plt.title("Training and Validation Loss Curves")
@@ -269,6 +270,15 @@ def save_loss_curves(eval_steps, train_losses, val_losses, output_path):
     plt.savefig(output_path, dpi=150)
     plt.close()
     print(f"saved loss curves to {output_path}")
+
+
+@torch.no_grad()
+def estimate_step_loss(model, split="val"):
+    model.eval()
+    xb, yb, mb, tb = get_batch(split)
+    _, loss = model(xb, t=tb, targets=yb, mask=mb)
+    model.train()
+    return loss.item()
 
 
 @torch.no_grad()
@@ -479,14 +489,14 @@ if __name__ == "__main__":
 
     model = Model().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    eval_steps = []
+    curve_steps = []
     train_loss_curve = []
     val_loss_curve = []
 
     for iter in range(max_iters):
         if iter % eval_interval == 0:
             losses = estimate_loss(model)
-            eval_steps.append(iter)
+            curve_steps.append(iter)
             train_loss_curve.append(losses["train"])
             val_loss_curve.append(losses["val"])
             print(
@@ -502,6 +512,11 @@ if __name__ == "__main__":
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        if iter % loss_curve_every == 0:
+            curve_steps.append(iter)
+            train_loss_curve.append(loss.item())
+            val_loss_curve.append(estimate_step_loss(model, split="val"))
 
         if iter > 0 and iter % save_interval == 0:
             torch.save(
@@ -528,7 +543,7 @@ if __name__ == "__main__":
         checkpoint_path,
     )
     print(f"saved final checkpoint to {checkpoint_path}")
-    save_loss_curves(eval_steps, train_loss_curve, val_loss_curve, loss_curve_path)
+    save_loss_curves(curve_steps, train_loss_curve, val_loss_curve, loss_curve_path)
 
     final_core = evaluate_masked_metrics(model, split="val", num_batches=eval_iters)
     entropy_by_t = evaluate_entropy_per_timestep(model, split="val", batches_per_t=2)

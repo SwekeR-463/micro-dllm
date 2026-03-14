@@ -93,11 +93,11 @@ At the end of training, `train.py` also prints a final validation metrics block 
 
 ```bash
 python3 inference.py \
-  --checkpoint artifacts/models/model_stories_10k_bpe_256.pt \
+  --checkpoint artifacts/models/model_stories_10k_256_adamw.pt \
   --prompt "Once upon a time" \
   --gen-len 256 \
   --temperature 0.0 \
-  --viz-video artifacts/media/diffusion_trace.mp4 \
+  --viz-video artifacts/media/diffusion_trace_adamw.mp4 \
   --trace-every 1 \
   --gif-frame-ms 180
 ```
@@ -110,7 +110,7 @@ Use `scripts/data.py` to stream TinyStories from Hugging Face and build a small 
 python3 scripts/data.py \
   --dataset roneneldan/TinyStories \
   --split train \
-  --num-stories 10000 \
+  --num-stories 40000 \
   --seed 1337 \
   --output data/stories.txt
 ```
