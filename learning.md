@@ -28,12 +28,24 @@
 
 Loss used in training:
 
-- Objective is full-sequence denoising: predict clean `x0` from noisy `xt`.
-- Loss function is categorical cross-entropy over vocabulary logits:
-  - `logits_flat = logits.view(B * Tseq, vocab_size)`
-  - `targets_flat = targets.view(B * Tseq)`
-  - `loss = F.cross_entropy(logits_flat, targets_flat)`
-- This is what teaches each position to recover its clean character at any sampled timestep `t`.
+- Objective follows MDLM-style masked denoising:
+  1. Sample timestep `t`.
+  2. Mask tokens according to the diffusion schedule.
+  3. Replace masked tokens with `[MASK]`.
+  4. Predict clean `x0` from noisy `xt`.
+  5. Compute categorical CE only on masked positions (`mask == True`).
+
+### Findings: Current Loss vs MDLM Paper
+
+- Earlier implementation differed from the paper in two ways:
+  - It used full-sequence CE, so visible tokens dominated the loss via easy copy behavior.
+  - It allowed a rare fallback to full-sequence CE when no tokens were masked in a batch.
+- Current fix in `train.py`:
+  - Enforces at least one masked token per sample in batch construction.
+  - Computes CE strictly on masked tokens only (no full-sequence fallback path).
+- Practical effect:
+  - Reported loss better reflects denoising difficulty on corrupted positions.
+  - Fast early loss drops from easy visible-token copying are reduced.
 
 How each character token is generated:
 
@@ -61,7 +73,7 @@ What matches:
 
 - Random timestep masking/noising of clean text (`x0 -> xt`).
 - Time-conditioned Transformer denoiser via `timestep_emb`.
-- Full-sequence denoising objective: predict clean `x0` from noisy `xt`.
+- Masked-position denoising objective: predict clean `x0` from noisy `xt`, optimize CE on masked tokens.
 - Reverse iterative denoising at inference (`t = T -> 1`) with an explicit final `t=0` pass.
 
 What is simplified vs Mercury-scale training:
@@ -69,7 +81,7 @@ What is simplified vs Mercury-scale training:
 - Small training setup (`~10.7M` params, `block_size=256`, `max_iters=5000`), not trillion-token scale.
 - Character-level local dataset (`data.txt`), not large mixed web + curated proprietary corpora.
 - No RLHF/DPO alignment stage in this codebase.
-- Loss is plain cross-entropy over all positions; there is no explicit `gamma(t)` weighting term.
+- Loss is plain cross-entropy over masked positions only; there is no explicit `gamma(t)` weighting term.
 - Forward corruption is implemented directly from `x0` at sampled `t` (masking), rather than exposing a full formal Markov chain object in code.
 
 ## Run 2: Change Done
@@ -78,7 +90,7 @@ What is simplified vs Mercury-scale training:
 - Reason: full-sequence loss was dropping too fast(4.3->1.8->0.6->0.7....) because many visible tokens are easy copy targets.
 - Added periodic masked-loss evaluation for both train and validation splits:
   - `eval step {iter} | train masked loss ... | val masked loss ...`
-- Added a safe fallback to full-sequence CE only for the rare edge case where a batch has zero masked tokens.
+- Updated batch masking to enforce at least one masked token per sample, so masked-only CE is always valid without fallback.
 
 ### Why the fast loss drop was expected (before objective change)
 
