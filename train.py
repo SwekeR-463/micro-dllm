@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import math
+from muon import SingleDeviceMuonWithAuxAdam
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -16,8 +17,8 @@ learning_rate = 3e-4
 eval_iters = 200
 save_interval = 500
 loss_curve_every = 1
-checkpoint_path = "artifacts/models/model_stories_10k_256_adamw.pt"
-loss_curve_path = "artifacts/media/new_loss_curves_adamw.png"
+checkpoint_path = "artifacts/models/model_stories_10k_256_muon.pt"
+loss_curve_path = "artifacts/media/new_loss_curves_muon.png"
 
 n_embd = 384
 n_head = 6
@@ -488,7 +489,21 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(loss_curve_path), exist_ok=True)
 
     model = Model().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    #optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
+    hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
+    nonhidden_params = [
+        *model.lm_head.parameters(),
+        *model.token_emb.parameters(),
+        *model.timestep_emb.parameters(),
+    ]
+    param_groups = [
+        dict(params=hidden_weights, use_muon=True,
+            lr=0.02, weight_decay=0.01),
+        dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
+            lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
+    ]
+    optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
     curve_steps = []
     train_loss_curve = []
     val_loss_curve = []

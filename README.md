@@ -93,7 +93,7 @@ At the end of training, `train.py` also prints a final validation metrics block 
 
 ```bash
 python3 inference.py \
-  --checkpoint artifacts/models/model_stories_10k_256_adamw.pt \
+  --checkpoint artifacts/models/model_stories_10k_256_muon.pt \
   --prompt "Once upon a time" \
   --gen-len 256 \
   --temperature 0.0 \
