@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import math
+from contextlib import nullcontext
 from muon import SingleDeviceMuonWithAuxAdam
 import torch
 import torch.nn as nn
@@ -11,14 +12,16 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from utils.tokenizer_utils import load_tokenizer
 
 # Hyperparameters
-batch_size = 64
-block_size = 256
-max_iters = 100000
-eval_interval = 500
-learning_rate = 3e-4
-eval_iters = 200
-save_interval = 500
-loss_curve_every = 1
+batch_size = int(os.environ.get("BATCH_SIZE", "32"))  # global batch across all GPUs
+block_size = int(os.environ.get("BLOCK_SIZE", "256"))
+max_iters = int(os.environ.get("MAX_ITERS", "100000"))
+eval_interval = int(os.environ.get("EVAL_INTERVAL", "500"))
+learning_rate = float(os.environ.get("LR", "3e-4"))
+eval_iters = int(os.environ.get("EVAL_ITERS", "50"))
+save_interval = int(os.environ.get("SAVE_INTERVAL", "500"))
+loss_curve_every = int(os.environ.get("LOSS_CURVE_EVERY", "10"))
+grad_accum_steps = int(os.environ.get("GRAD_ACCUM_STEPS", "1"))
+max_tokens = int(os.environ.get("MAX_TOKENS", "0"))
 checkpoint_path = "artifacts/models/model_stories_10k_256_muon.pt"
 loss_curve_path = "artifacts/media/new_loss_curves_muon.png"
 
@@ -76,10 +79,15 @@ if batch_size % world_size != 0:
         f"batch_size ({batch_size}) must be divisible by world_size ({world_size})"
     )
 local_batch_size = batch_size // world_size
+if grad_accum_steps < 1:
+    raise ValueError(f"grad_accum_steps must be >= 1, got {grad_accum_steps}")
 
 torch.manual_seed(1337 + rank)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(1337 + rank)
+
+use_amp = bool(int(os.environ.get("AMP", "1"))) and device.type == "cuda"
+amp_dtype = torch.float16
 
 # Data
 with open(stories_path, "r", encoding="utf-8") as f:
@@ -99,6 +107,8 @@ def decode(l):
     return tokenizer.decode(l, skip_special_tokens=False)
 
 data = torch.tensor(encode(text), dtype=torch.long)
+if max_tokens > 0:
+    data = data[:max_tokens]
 n = int(0.9 * len(data))
 train_data = data[:n]
 val_data = data[n:]
@@ -300,6 +310,12 @@ def dist_mean_dict(values):
     return {k: dist_mean_scalar(v) for k, v in values.items()}
 
 
+def amp_context():
+    if use_amp:
+        return torch.autocast(device_type="cuda", dtype=amp_dtype)
+    return nullcontext()
+
+
 @torch.no_grad()
 def estimate_loss(model):
     model.eval()
@@ -308,7 +324,8 @@ def estimate_loss(model):
         split_losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             xb, yb, mb, tb = get_batch(split)
-            _, loss = model(xb, t=tb, targets=yb, mask=mb)
+            with amp_context():
+                _, loss = model(xb, t=tb, targets=yb, mask=mb)
             split_losses[k] = loss.item()
         losses[split] = split_losses.mean().item()
     model.train()
@@ -340,7 +357,8 @@ def save_loss_curves(eval_steps, train_losses, val_losses, output_path):
 def estimate_step_loss(model, split="val"):
     model.eval()
     xb, yb, mb, tb = get_batch(split)
-    _, loss = model(xb, t=tb, targets=yb, mask=mb)
+    with amp_context():
+        _, loss = model(xb, t=tb, targets=yb, mask=mb)
     model.train()
     return loss.item()
 
@@ -354,7 +372,8 @@ def evaluate_masked_metrics(model, split="val", num_batches=eval_iters):
 
     for _ in range(num_batches):
         xb, yb, mb, tb = get_batch(split)
-        logits, loss = model(xb, t=tb, targets=yb, mask=mb)
+        with amp_context():
+            logits, loss = model(xb, t=tb, targets=yb, mask=mb)
         total_loss += loss.item()
 
         pred = torch.argmax(logits, dim=-1)
@@ -383,7 +402,8 @@ def evaluate_entropy_per_timestep(model, split="val", batches_per_t=2):
         entropy_count = 0
         for _ in range(batches_per_t):
             xb, _, mb, tb = get_batch_at_t(split, t_value)
-            logits, _ = model(xb, t=tb)
+            with amp_context():
+                logits, _ = model(xb, t=tb)
             log_probs = F.log_softmax(logits, dim=-1)
             probs = log_probs.exp()
             token_entropy = -(probs * log_probs).sum(dim=-1)
@@ -420,7 +440,8 @@ def generate_with_trace(model, prompt_tokens, gen_len=128, temperature=0.0):
 
     for t in reversed(range(1, T + 1)):
         t_tensor = torch.tensor([t], device=device)
-        logits, _ = model(x, t=t_tensor)
+        with amp_context():
+            logits, _ = model(x, t=t_tensor)
 
         if temperature <= 0:
             sampled = torch.argmax(logits, dim=-1)
@@ -446,7 +467,8 @@ def generate_with_trace(model, prompt_tokens, gen_len=128, temperature=0.0):
         states.append(x[0, gen_slice].clone())
 
     t0 = torch.tensor([0], device=device)
-    logits, _ = model(x, t=t0)
+    with amp_context():
+        logits, _ = model(x, t=t0)
     final_tokens = torch.argmax(logits, dim=-1)
     x[:, gen_slice] = final_tokens[:, gen_slice]
     states.append(x[0, gen_slice].clone())
@@ -520,7 +542,8 @@ def generate(model, prompt_len=16):
 
     for t in reversed(range(1, T + 1)):
         t_tensor = torch.tensor([t], device=device)
-        logits, _ = model(x, t=t_tensor)
+        with amp_context():
+            logits, _ = model(x, t=t_tensor)
         probs = F.softmax(logits, dim=-1)
         sampled = torch.multinomial(probs.view(-1, vocab_size), 1).view(1, block_size)
         sampled_conf = probs.gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
@@ -540,7 +563,8 @@ def generate(model, prompt_len=16):
 
     # Explicit final denoise at t=0.
     t0 = torch.tensor([0], device=device)
-    logits, _ = model(x, t=t0)
+    with amp_context():
+        logits, _ = model(x, t=t0)
     final_tokens = torch.argmax(logits, dim=-1)
     x = torch.where(prompt_mask, x, final_tokens)
 
@@ -556,7 +580,9 @@ if __name__ == "__main__":
                 print(
                     "Distributed mode enabled "
                     f"(world_size={world_size}, global_batch_size={batch_size}, "
-                    f"per_gpu_batch_size={local_batch_size})."
+                    f"per_gpu_batch_size={local_batch_size}, "
+                    f"grad_accum_steps={grad_accum_steps}, amp={use_amp}, "
+                    f"max_tokens={max_tokens if max_tokens > 0 else 'all'})."
                 )
 
         model = Model().to(device)
@@ -565,6 +591,7 @@ if __name__ == "__main__":
             model = DDP(model, device_ids=ddp_device_ids)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
         # hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
         # hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
         # nonhidden_params = [
@@ -601,14 +628,33 @@ if __name__ == "__main__":
                 if distributed:
                     dist.barrier()
 
-            xb, yb, mb, tb = get_batch("train")
-            _, loss = model(xb, t=tb, targets=yb, mask=mb)
+            optimizer.zero_grad(set_to_none=True)
+            local_loss_sum = 0.0
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            for micro_step in range(grad_accum_steps):
+                xb, yb, mb, tb = get_batch("train")
+                sync_context = (
+                    model.no_sync()
+                    if distributed and micro_step < grad_accum_steps - 1
+                    else nullcontext()
+                )
+                with sync_context:
+                    with amp_context():
+                        _, loss = model(xb, t=tb, targets=yb, mask=mb)
+                    local_loss_sum += loss.detach().item()
+                    loss = loss / grad_accum_steps
+                    if use_amp:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
 
-            avg_train_loss = dist_mean_scalar(loss.detach().item())
+            if use_amp:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+
+            avg_train_loss = dist_mean_scalar(local_loss_sum / grad_accum_steps)
 
             if iter % loss_curve_every == 0 and is_master:
                 curve_steps.append(iter)
