@@ -76,10 +76,28 @@ Requirements:
 ```bash
 python3 scripts/data.py --num-stories 10000 --output data/stories.txt
 python3 scripts/train_tokenizer.py --input data/stories.txt --output artifacts/tokenizer/tokenizer.json
+# single GPU / CPU
 python3 train.py
 ```
 
 Checkpoints are saved to `artifacts/models/` during training and at the end.
+
+You can run `python3 train.py` directly for single-GPU training (`WORLD_SIZE=1` path).
+
+### Kaggle 2x T4 (Longer Run Stable Preset)
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+BATCH_SIZE=16 \
+GRAD_ACCUM_STEPS=4 \
+MAX_TOKENS=300000 \
+EVAL_ITERS=10 \
+LOSS_CURVE_EVERY=50 \
+torchrun --standalone --nproc_per_node=2 train.py
+```
+
+This keeps effective batch size at `64` with lower peak memory.
+If OOM restarts continue, try `BATCH_SIZE=8` and/or `BLOCK_SIZE=192` (or `128`).
 
 At the end of training, `train.py` also prints a final validation metrics block with:
 

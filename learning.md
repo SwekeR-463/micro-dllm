@@ -185,3 +185,64 @@ one-liner:
 
 - `training_steps / T` is a good intuition for timestep coverage, but real coverage also depends on batch size and timestep sampling/weighting; some timesteps can still be undertrained.
 - "Entropy amplification" risk is strongest under stochastic decoding; with greedy or constrained decoding, larger `T` can still improve quality, but usually with diminishing returns and higher inference cost.
+
+## Kaggle Longer Runs Support
+
+When running with `torchrun` on Kaggle (2x T4), processes can get `SIGKILL` if host/GPU memory spikes.  
+To stabilize longer runs, `train.py` now supports memory-control env vars and mixed precision.
+
+### What was added in `train.py`
+
+- `BATCH_SIZE` (global across GPUs)
+- `GRAD_ACCUM_STEPS` (keeps effective batch while lowering peak memory)
+- `MAX_TOKENS` (optional cap on tokenized corpus size)
+- `EVAL_ITERS`, `LOSS_CURVE_EVERY`, `MAX_ITERS`, `BLOCK_SIZE`, `LR`, etc. via env overrides
+- CUDA AMP (`AMP=1` default on CUDA) + `GradScaler`
+- Gradient accumulation with DDP `no_sync()` for intermediate micro-steps
+
+### Recommended 2x T4 command (stable for long runs)
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+BATCH_SIZE=16 \
+GRAD_ACCUM_STEPS=4 \
+MAX_TOKENS=300000 \
+EVAL_ITERS=10 \
+LOSS_CURVE_EVERY=50 \
+torchrun --standalone --nproc_per_node=2 train.py
+```
+
+Notes:
+- Effective batch here is `64` (`16 * 4`) with much lower peak memory.
+- If restarts continue: set `BATCH_SIZE=8` and/or `BLOCK_SIZE=192` (or `128`).
+- If dataset is very large, reduce `MAX_TOKENS` further.
+
+### Why these hyperparameter choices
+
+- `BATCH_SIZE=16` (global on 2 GPUs):
+  - Per-GPU microbatch becomes `8`, which is much safer for T4 memory than larger per-rank batches.
+  - Keeps throughput reasonable while avoiding frequent OOM kills.
+
+- `GRAD_ACCUM_STEPS=4`:
+  - Effective batch size remains `64` (`16 * 4`) without requiring memory for 64 samples at once.
+  - Preserves optimization behavior closer to the original larger-batch setup.
+
+- `AMP=1` (default on CUDA):
+  - FP16 activations/gradients significantly reduce VRAM usage.
+  - Usually gives speedup on T4 while staying stable with `GradScaler`.
+
+- `MAX_TOKENS=300000`:
+  - Caps host RAM and preprocessing footprint in notebook environments.
+  - Useful for Kaggle sessions where RAM spikes can trigger process kills.
+
+- `EVAL_ITERS=10`:
+  - Validation becomes much cheaper, reducing periodic memory/time spikes.
+  - Enough for trend monitoring during long runs; can be increased later for final reporting.
+
+- `LOSS_CURVE_EVERY=50`:
+  - Reduces per-step eval/log overhead and memory churn from frequent val probes.
+  - Keeps diagnostics without stressing notebook runtime.
+
+- Keep `BLOCK_SIZE=256` first, then reduce only if needed:
+  - Sequence length drives activation memory strongly (`O(B * L * d)` plus attention terms).
+  - Dropping to `192` or `128` is a reliable fallback when OOM persists.

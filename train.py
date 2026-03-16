@@ -22,8 +22,8 @@ save_interval = int(os.environ.get("SAVE_INTERVAL", "500"))
 loss_curve_every = int(os.environ.get("LOSS_CURVE_EVERY", "10"))
 grad_accum_steps = int(os.environ.get("GRAD_ACCUM_STEPS", "1"))
 max_tokens = int(os.environ.get("MAX_TOKENS", "0"))
-checkpoint_path = "artifacts/models/model_stories_10k_256_muon.pt"
-loss_curve_path = "artifacts/media/new_loss_curves_muon.png"
+checkpoint_path = "artifacts/models/model_stories_100k_256_adamw.pt"
+loss_curve_path = "artifacts/media/new_loss_curves_adamw.png"
 
 n_embd = 384
 n_head = 6
