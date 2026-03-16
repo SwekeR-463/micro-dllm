@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import math
+from muon import SingleDeviceMuonWithAuxAdam
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -10,13 +11,14 @@ from utils.tokenizer_utils import load_tokenizer
 # Hyperparameters
 batch_size = 64
 block_size = 256
-max_iters = 20000
+max_iters = 50000
 eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
 save_interval = 500
-checkpoint_path = "artifacts/models/model_stories_10k_bpe_256.pt"
-loss_curve_path = "artifacts/media/loss_curves.png"
+loss_curve_every = 1
+checkpoint_path = "artifacts/models/model_stories_10k_256_muon.pt"
+loss_curve_path = "artifacts/media/new_loss_curves_muon.png"
 
 n_embd = 384
 n_head = 6
@@ -76,6 +78,8 @@ def get_batch(split):
     for i in range(batch_size):
         a_t = survival_prob(t[i].item())
         token_mask = torch.rand(block_size) > a_t
+        if not token_mask.any():
+            token_mask[torch.randint(block_size, (1,)).item()] = True
         xt[i][token_mask] = mask_token_id
         mask[i] = token_mask
 
@@ -97,6 +101,11 @@ def get_batch_at_t(split, t_value):
     a_t = survival_prob(t_value)
 
     token_mask = torch.rand(batch_size, block_size) > a_t
+    empty_rows = ~token_mask.any(dim=1)
+    if empty_rows.any():
+        row_ids = empty_rows.nonzero(as_tuple=False).flatten()
+        rand_cols = torch.randint(block_size, (row_ids.numel(),))
+        token_mask[row_ids, rand_cols] = True
     xt = x0.clone()
     xt[token_mask] = mask_token_id
 
@@ -218,21 +227,12 @@ class Model(nn.Module):
 
         loss = None
         if targets is not None:
-            # Train denoising only on corrupted positions to avoid easy copy loss.
-            if mask is not None:
-                masked_logits = logits[mask]
-                masked_targets = targets[mask]
-                if masked_targets.numel() > 0:
-                    loss = F.cross_entropy(masked_logits, masked_targets)
-                else:
-                    # Extremely rare edge case when no tokens are masked in batch.
-                    logits_flat = logits.view(B * Tseq, -1)
-                    targets_flat = targets.view(B * Tseq)
-                    loss = F.cross_entropy(logits_flat, targets_flat)
-            else:
-                logits_flat = logits.view(B * Tseq, -1)
-                targets_flat = targets.view(B * Tseq)
-                loss = F.cross_entropy(logits_flat, targets_flat)
+            # MDLM objective: CE only on tokens masked at timestep t.
+            if mask is None:
+                raise ValueError("mask is required when targets are provided.")
+            masked_logits = logits[mask]
+            masked_targets = targets[mask]
+            loss = F.cross_entropy(masked_logits, masked_targets)
 
         return logits, loss
 
@@ -260,8 +260,8 @@ def save_loss_curves(eval_steps, train_losses, val_losses, output_path):
         return
 
     plt.figure(figsize=(8, 5))
-    plt.plot(eval_steps, train_losses, label="train masked loss", marker="o")
-    plt.plot(eval_steps, val_losses, label="val masked loss", marker="o")
+    plt.plot(eval_steps, train_losses, label="train masked loss", linewidth=1.2)
+    plt.plot(eval_steps, val_losses, label="val masked loss", linewidth=1.2)
     plt.xlabel("step")
     plt.ylabel("loss")
     plt.title("Training and Validation Loss Curves")
@@ -271,6 +271,15 @@ def save_loss_curves(eval_steps, train_losses, val_losses, output_path):
     plt.savefig(output_path, dpi=150)
     plt.close()
     print(f"saved loss curves to {output_path}")
+
+
+@torch.no_grad()
+def estimate_step_loss(model, split="val"):
+    model.eval()
+    xb, yb, mb, tb = get_batch(split)
+    _, loss = model(xb, t=tb, targets=yb, mask=mb)
+    model.train()
+    return loss.item()
 
 
 @torch.no_grad()
@@ -481,14 +490,28 @@ if __name__ == "__main__":
 
     model = Model().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    eval_steps = []
+    #hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
+    #hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
+    #nonhidden_params = [
+    #    *model.lm_head.parameters(),
+    #    *model.token_emb.parameters(),
+    #    *model.timestep_emb.parameters(),
+    #]
+    #param_groups = [
+    #    dict(params=hidden_weights, use_muon=True,
+    #        lr=0.02, weight_decay=0.01),
+    #    dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
+    #        lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
+    #]
+    #optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
+    curve_steps = []
     train_loss_curve = []
     val_loss_curve = []
 
     for iter in range(max_iters):
         if iter % eval_interval == 0:
             losses = estimate_loss(model)
-            eval_steps.append(iter)
+            curve_steps.append(iter)
             train_loss_curve.append(losses["train"])
             val_loss_curve.append(losses["val"])
             print(
@@ -504,6 +527,11 @@ if __name__ == "__main__":
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        if iter % loss_curve_every == 0:
+            curve_steps.append(iter)
+            train_loss_curve.append(loss.item())
+            val_loss_curve.append(estimate_step_loss(model, split="val"))
 
         if iter > 0 and iter % save_interval == 0:
             torch.save(
@@ -530,7 +558,7 @@ if __name__ == "__main__":
         checkpoint_path,
     )
     print(f"saved final checkpoint to {checkpoint_path}")
-    save_loss_curves(eval_steps, train_loss_curve, val_loss_curve, loss_curve_path)
+    save_loss_curves(curve_steps, train_loss_curve, val_loss_curve, loss_curve_path)
 
     final_core = evaluate_masked_metrics(model, split="val", num_batches=eval_iters)
     entropy_by_t = evaluate_entropy_per_timestep(model, split="val", batches_per_t=2)
