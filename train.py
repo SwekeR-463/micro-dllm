@@ -5,13 +5,15 @@ import math
 from muon import SingleDeviceMuonWithAuxAdam
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from torch.nn import functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
 from utils.tokenizer_utils import load_tokenizer
 
 # Hyperparameters
 batch_size = 64
 block_size = 256
-max_iters = 50000
+max_iters = 100000
 eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
@@ -29,13 +31,55 @@ T = 100  # diffusion steps
 tokenizer_path = "artifacts/tokenizer/tokenizer.json"
 stories_path = "data/stories.txt"
 
-device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else ("mps" if torch.backends.mps.is_available() else "cpu")
-)
+def setup_distributed():
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    distributed = world_size > 1
 
-torch.manual_seed(1337)
+    if distributed:
+        if torch.cuda.is_available():
+            backend = "nccl"
+            torch.cuda.set_device(local_rank)
+            device = torch.device("cuda", local_rank)
+        else:
+            backend = "gloo"
+            device = torch.device("cpu")
+        dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
+    else:
+        device = torch.device(
+            "cuda"
+            if torch.cuda.is_available()
+            else ("mps" if torch.backends.mps.is_available() else "cpu")
+        )
+
+    return {
+        "distributed": distributed,
+        "world_size": world_size,
+        "rank": rank,
+        "local_rank": local_rank,
+        "is_master": rank == 0,
+        "device": device,
+    }
+
+
+dist_info = setup_distributed()
+distributed = dist_info["distributed"]
+world_size = dist_info["world_size"]
+rank = dist_info["rank"]
+local_rank = dist_info["local_rank"]
+is_master = dist_info["is_master"]
+device = dist_info["device"]
+
+if batch_size % world_size != 0:
+    raise ValueError(
+        f"batch_size ({batch_size}) must be divisible by world_size ({world_size})"
+    )
+local_batch_size = batch_size // world_size
+
+torch.manual_seed(1337 + rank)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(1337 + rank)
 
 # Data
 with open(stories_path, "r", encoding="utf-8") as f:
@@ -67,15 +111,15 @@ def survival_prob(t):
 # Batch Loader
 def get_batch(split):
     data_split = train_data if split == "train" else val_data
-    idx = torch.randint(len(data_split) - block_size, (batch_size,))
+    idx = torch.randint(len(data_split) - block_size, (local_batch_size,))
     x0 = torch.stack([data_split[i : i + block_size] for i in idx])
 
-    t = torch.randint(1, T + 1, (batch_size,))
+    t = torch.randint(1, T + 1, (local_batch_size,))
 
     xt = x0.clone()
     mask = torch.zeros_like(x0, dtype=torch.bool)
 
-    for i in range(batch_size):
+    for i in range(local_batch_size):
         a_t = survival_prob(t[i].item())
         token_mask = torch.rand(block_size) > a_t
         if not token_mask.any():
@@ -93,14 +137,14 @@ def get_batch(split):
 
 def get_batch_at_t(split, t_value):
     data_split = train_data if split == "train" else val_data
-    idx = torch.randint(len(data_split) - block_size, (batch_size,))
+    idx = torch.randint(len(data_split) - block_size, (local_batch_size,))
     x0 = torch.stack([data_split[i : i + block_size] for i in idx])
 
     t_value = int(t_value)
-    t = torch.full((batch_size,), t_value, dtype=torch.long)
+    t = torch.full((local_batch_size,), t_value, dtype=torch.long)
     a_t = survival_prob(t_value)
 
-    token_mask = torch.rand(batch_size, block_size) > a_t
+    token_mask = torch.rand(local_batch_size, block_size) > a_t
     empty_rows = ~token_mask.any(dim=1)
     if empty_rows.any():
         row_ids = empty_rows.nonzero(as_tuple=False).flatten()
@@ -235,6 +279,25 @@ class Model(nn.Module):
             loss = F.cross_entropy(masked_logits, masked_targets)
 
         return logits, loss
+
+
+def unwrap_model(model):
+    return model.module if isinstance(model, DDP) else model
+
+
+def dist_mean_scalar(value):
+    if not distributed:
+        return float(value)
+    t = torch.tensor(float(value), device=device)
+    dist.all_reduce(t, op=dist.ReduceOp.SUM)
+    t /= world_size
+    return t.item()
+
+
+def dist_mean_dict(values):
+    if not distributed:
+        return values
+    return {k: dist_mean_scalar(v) for k, v in values.items()}
 
 
 @torch.no_grad()
@@ -485,107 +548,140 @@ def generate(model, prompt_len=16):
 
 # Training
 if __name__ == "__main__":
-    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-    os.makedirs(os.path.dirname(loss_curve_path), exist_ok=True)
+    try:
+        if is_master:
+            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+            os.makedirs(os.path.dirname(loss_curve_path), exist_ok=True)
+            if distributed:
+                print(
+                    "Distributed mode enabled "
+                    f"(world_size={world_size}, global_batch_size={batch_size}, "
+                    f"per_gpu_batch_size={local_batch_size})."
+                )
 
-    model = Model().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    #hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
-    #hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
-    #nonhidden_params = [
-    #    *model.lm_head.parameters(),
-    #    *model.token_emb.parameters(),
-    #    *model.timestep_emb.parameters(),
-    #]
-    #param_groups = [
-    #    dict(params=hidden_weights, use_muon=True,
-    #        lr=0.02, weight_decay=0.01),
-    #    dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
-    #        lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
-    #]
-    #optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
-    curve_steps = []
-    train_loss_curve = []
-    val_loss_curve = []
+        model = Model().to(device)
+        if distributed:
+            ddp_device_ids = [local_rank] if device.type == "cuda" else None
+            model = DDP(model, device_ids=ddp_device_ids)
 
-    for iter in range(max_iters):
-        if iter % eval_interval == 0:
-            losses = estimate_loss(model)
-            curve_steps.append(iter)
-            train_loss_curve.append(losses["train"])
-            val_loss_curve.append(losses["val"])
-            print(
-                f"eval step {iter} | train masked loss {losses['train']:.4f} | "
-                f"val masked loss {losses['val']:.4f}"
-            )
-            print("Generating sample...")
-            print(generate(model))
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+        # hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
+        # hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
+        # nonhidden_params = [
+        #     *model.lm_head.parameters(),
+        #     *model.token_emb.parameters(),
+        #     *model.timestep_emb.parameters(),
+        # ]
+        # param_groups = [
+        #     dict(params=hidden_weights, use_muon=True,
+        #         lr=0.02, weight_decay=0.01),
+        #     dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
+        #         lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
+        # ]
+        # optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
 
-        xb, yb, mb, tb = get_batch("train")
-        logits, loss = model(xb, t=tb, targets=yb, mask=mb)
+        curve_steps = []
+        train_loss_curve = []
+        val_loss_curve = []
+        avg_train_loss = float("nan")
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        for iter in range(max_iters):
+            if iter % eval_interval == 0:
+                losses = dist_mean_dict(estimate_loss(model))
+                if is_master:
+                    curve_steps.append(iter)
+                    train_loss_curve.append(losses["train"])
+                    val_loss_curve.append(losses["val"])
+                    print(
+                        f"eval step {iter} | train masked loss {losses['train']:.4f} | "
+                        f"val masked loss {losses['val']:.4f}"
+                    )
+                    print("Generating sample...")
+                    print(generate(model))
+                if distributed:
+                    dist.barrier()
 
-        if iter % loss_curve_every == 0:
-            curve_steps.append(iter)
-            train_loss_curve.append(loss.item())
-            val_loss_curve.append(estimate_step_loss(model, split="val"))
+            xb, yb, mb, tb = get_batch("train")
+            _, loss = model(xb, t=tb, targets=yb, mask=mb)
 
-        if iter > 0 and iter % save_interval == 0:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            avg_train_loss = dist_mean_scalar(loss.detach().item())
+
+            if iter % loss_curve_every == 0 and is_master:
+                curve_steps.append(iter)
+                train_loss_curve.append(avg_train_loss)
+                if not distributed:
+                    val_loss_curve.append(estimate_step_loss(model, split="val"))
+                else:
+                    val_loss_curve.append(float("nan"))
+
+            if iter > 0 and iter % save_interval == 0 and is_master:
+                torch.save(
+                    {
+                        "iter": iter,
+                        "model_state_dict": unwrap_model(model).state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "loss": avg_train_loss,
+                    },
+                    checkpoint_path,
+                )
+                print(f"saved checkpoint to {checkpoint_path} at step {iter}")
+
+            if iter % 100 == 0 and is_master:
+                print(f"step {iter} | loss {avg_train_loss:.4f}")
+
+        if distributed:
+            dist.barrier()
+
+        if is_master:
             torch.save(
                 {
-                    "iter": iter,
-                    "model_state_dict": model.state_dict(),
+                    "iter": max_iters,
+                    "model_state_dict": unwrap_model(model).state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": loss.item(),
+                    "loss": avg_train_loss,
                 },
                 checkpoint_path,
             )
-            print(f"saved checkpoint to {checkpoint_path} at step {iter}")
+            print(f"saved final checkpoint to {checkpoint_path}")
+            save_loss_curves(curve_steps, train_loss_curve, val_loss_curve, loss_curve_path)
 
-        if iter % 100 == 0:
-            print(f"step {iter} | loss {loss.item():.4f}")
+            final_core = evaluate_masked_metrics(model, split="val", num_batches=eval_iters)
+            entropy_by_t = evaluate_entropy_per_timestep(model, split="val", batches_per_t=2)
+            final_gen = evaluate_generation_metrics(
+                model,
+                split="val",
+                num_samples=16,
+                prompt_len=32,
+                gen_len=128,
+                temperature=0.0,
+            )
 
-    torch.save(
-        {
-            "iter": max_iters,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "loss": loss.item(),
-        },
-        checkpoint_path,
-    )
-    print(f"saved final checkpoint to {checkpoint_path}")
-    save_loss_curves(curve_steps, train_loss_curve, val_loss_curve, loss_curve_path)
+            entropy_mean = sum(entropy_by_t) / max(1, len(entropy_by_t))
+            entropy_t1 = entropy_by_t[0]
+            entropy_tmid = entropy_by_t[(len(entropy_by_t) - 1) // 2]
+            entropy_tT = entropy_by_t[-1]
 
-    final_core = evaluate_masked_metrics(model, split="val", num_batches=eval_iters)
-    entropy_by_t = evaluate_entropy_per_timestep(model, split="val", batches_per_t=2)
-    final_gen = evaluate_generation_metrics(
-        model,
-        split="val",
-        num_samples=16,
-        prompt_len=32,
-        gen_len=128,
-        temperature=0.0,
-    )
+            print("\n=== Final Evaluation Metrics (val) ===")
+            print(f"Perplexity: {final_core['perplexity']:.4f}")
+            print(f"Masked reconstruction accuracy: {final_core['masked_recon_acc']:.4f}")
+            print(
+                "Entropy per timestep (masked positions): "
+                f"mean={entropy_mean:.4f}, t=1:{entropy_t1:.4f}, "
+                f"t={1 + (T - 1) // 2}:{entropy_tmid:.4f}, t={T}:{entropy_tT:.4f}"
+            )
+            print(
+                "Reverse-step token change rate: "
+                f"{final_gen['reverse_step_token_change_rate']:.4f}"
+            )
+            print(f"Distinct-2 diversity (generated region): {final_gen['distinct_2']:.4f}")
 
-    entropy_mean = sum(entropy_by_t) / max(1, len(entropy_by_t))
-    entropy_t1 = entropy_by_t[0]
-    entropy_tmid = entropy_by_t[(len(entropy_by_t) - 1) // 2]
-    entropy_tT = entropy_by_t[-1]
+        if distributed:
+            dist.barrier()
 
-    print("\n=== Final Evaluation Metrics (val) ===")
-    print(f"Perplexity: {final_core['perplexity']:.4f}")
-    print(f"Masked reconstruction accuracy: {final_core['masked_recon_acc']:.4f}")
-    print(
-        "Entropy per timestep (masked positions): "
-        f"mean={entropy_mean:.4f}, t=1:{entropy_t1:.4f}, "
-        f"t={1 + (T - 1) // 2}:{entropy_tmid:.4f}, t={T}:{entropy_tT:.4f}"
-    )
-    print(
-        "Reverse-step token change rate: "
-        f"{final_gen['reverse_step_token_change_rate']:.4f}"
-    )
-    print(f"Distinct-2 diversity (generated region): {final_gen['distinct_2']:.4f}")
+    finally:
+        if distributed and dist.is_initialized():
+            dist.destroy_process_group()
