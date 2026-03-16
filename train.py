@@ -23,7 +23,7 @@ loss_curve_every = int(os.environ.get("LOSS_CURVE_EVERY", "10"))
 grad_accum_steps = int(os.environ.get("GRAD_ACCUM_STEPS", "1"))
 max_tokens = int(os.environ.get("MAX_TOKENS", "0"))
 checkpoint_path = "artifacts/models/model_stories_100k_256_adamw.pt"
-loss_curve_path = "artifacts/media/new_loss_curves_adamw.png"
+loss_curve_path = "artifacts/media/new_loss_curves_adamw_100k.png"
 
 n_embd = 384
 n_head = 6
@@ -611,6 +611,7 @@ if __name__ == "__main__":
         train_loss_curve = []
         val_loss_curve = []
         avg_train_loss = float("nan")
+        last_val_loss_for_curve = float("nan")
 
         for iter in range(max_iters):
             if iter % eval_interval == 0:
@@ -619,6 +620,7 @@ if __name__ == "__main__":
                     curve_steps.append(iter)
                     train_loss_curve.append(losses["train"])
                     val_loss_curve.append(losses["val"])
+                    last_val_loss_for_curve = losses["val"]
                     print(
                         f"eval step {iter} | train masked loss {losses['train']:.4f} | "
                         f"val masked loss {losses['val']:.4f}"
@@ -662,7 +664,7 @@ if __name__ == "__main__":
                 if not distributed:
                     val_loss_curve.append(estimate_step_loss(model, split="val"))
                 else:
-                    val_loss_curve.append(float("nan"))
+                    val_loss_curve.append(last_val_loss_for_curve)
 
             if iter > 0 and iter % save_interval == 0 and is_master:
                 torch.save(
