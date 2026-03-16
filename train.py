@@ -11,7 +11,7 @@ from utils.tokenizer_utils import load_tokenizer
 # Hyperparameters
 batch_size = 64
 block_size = 256
-max_iters = 20000
+max_iters = 50000
 eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
@@ -55,7 +55,7 @@ def decode(l):
     return tokenizer.decode(l, skip_special_tokens=False)
 
 data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9 * len(data))
+n = int(0.8 * len(data))
 train_data = data[:n]
 val_data = data[n:]
 
@@ -489,21 +489,21 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(loss_curve_path), exist_ok=True)
 
     model = Model().to(device)
-    #optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
-    hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
-    nonhidden_params = [
-        *model.lm_head.parameters(),
-        *model.token_emb.parameters(),
-        *model.timestep_emb.parameters(),
-    ]
-    param_groups = [
-        dict(params=hidden_weights, use_muon=True,
-            lr=0.02, weight_decay=0.01),
-        dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
-            lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
-    ]
-    optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    #hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
+    #hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
+    #nonhidden_params = [
+    #    *model.lm_head.parameters(),
+    #    *model.token_emb.parameters(),
+    #    *model.timestep_emb.parameters(),
+    #]
+    #param_groups = [
+    #    dict(params=hidden_weights, use_muon=True,
+    #        lr=0.02, weight_decay=0.01),
+    #    dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
+    #        lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
+    #]
+    #optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
     curve_steps = []
     train_loss_curve = []
     val_loss_curve = []
