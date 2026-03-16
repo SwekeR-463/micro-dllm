@@ -55,7 +55,7 @@ def decode(l):
     return tokenizer.decode(l, skip_special_tokens=False)
 
 data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.8 * len(data))
+n = int(0.9 * len(data))
 train_data = data[:n]
 val_data = data[n:]
 
