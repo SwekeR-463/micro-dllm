@@ -1,9 +1,9 @@
 # micro-dllm
 
-This repo trains a micro-dLLM(~10.7M) based on [mercury's training and inference](https://arxiv.org/abs/2506.17298) approach over characters and generates text with iterative denoising.
+This repo trains a micro-dLLM(~12.23M) based on [mercury's training and inference](https://arxiv.org/abs/2506.17298) approach with BPE tokens and generates text with iterative denoising.
 
 
-[![Diffusion Trace](./diffusion_trace.gif)](./diffusion_trace.mp4)
+[![Diffusion Trace](./artifacts/media/diffusion_trace.gif)](./artifacts/media/diffusion_trace.mp4)
 
 
 ## What This Implements
@@ -17,8 +17,8 @@ This repo trains a micro-dLLM(~10.7M) based on [mercury's training and inference
 
 ## Architecture Details
 
-- Tokenization: character-level vocabulary from `data.txt` + `_` mask token
-- Context length: `block_size = 256` characters
+- Tokenization: BPE tokenizer from `data/stories.txt` + `[MASK]` token
+- Context length: `block_size = 256` tokens
 - Diffusion steps: `T = 100`
 - Layers: `n_layer = 6`
 - Attention heads: `n_head = 6`
@@ -39,7 +39,7 @@ Training setup:
 - Learning rate: `3e-4`
 - Forward noising: cosine survival schedule  
   `a_t = cos((t / T) * pi / 2)`
-- Objective: predict full clean sequence `x0` from noisy `xt` (cross-entropy over all positions)
+- Objective: predict clean sequence `x0` from noisy `xt` (cross-entropy on masked positions)
 
 Inference setup:
 
@@ -60,9 +60,14 @@ At the end of training, also prints a final validation metrics block with:
 
 ## Project Files
 
-- `train.py`: model + training + periodic/final checkpoint saving
-- `inference.py`: checkpoint loading, generation from prompt, MP4 trace export
-- `data.txt`: training corpus
+- Root:
+  - `train.py`: model + training
+  - `inference.py`: checkpoint loading + generation/trace export
+  - `README.md`, `learning.md`, `requirements.txt`
+- `scripts/`: dataset/tokenizer preparation scripts
+- `data/`: local corpus files (`stories.txt`, etc.)
+- `utils/`: shared utility modules
+- `artifacts/`: checkpoints, tokenizer JSON, plots, and media outputs
 
 ## Setup
 
@@ -72,34 +77,67 @@ Requirements:
 - `torch`
 - `Pillow` (for frame rendering)
 - `ffmpeg` (for MP4 export)
+- `tokenizers` (for BPE tokenization)
 
 ## Training
 
 ```bash
+python3 scripts/data.py --num-stories 10000 --output data/stories.txt
+python3 scripts/train_tokenizer.py --input data/stories.txt --output artifacts/tokenizer/tokenizer.json
 python3 train.py
 ```
 
-Checkpoints are saved to `model.pt` during training and at the end.
+Checkpoints are saved to `artifacts/models/` during training and at the end.
+
+At the end of training, `train.py` also prints a final validation metrics block with:
+
+- `Perplexity` (derived from masked validation cross-entropy)
+- `Masked reconstruction accuracy` (accuracy on corrupted positions only)
+- `Entropy per timestep` (masked-token predictive entropy across diffusion timesteps)
+- `Reverse-step token change rate` (fraction of generated tokens that change between reverse steps)
+- `Distinct-2 diversity` (unique generated bigrams / total generated bigrams, prompt excluded)
 
 ## Inference + Visualizer
 
 ```bash
 python3 inference.py \
-  --checkpoint model.pt \
-  --prompt "on the verge of loving" \
-  --gen-len 128 \
-  --temperature 1.0 \
-  --viz-video diffusion_trace.mp4 \
+  --checkpoint artifacts/models/model_stories_10k_bpe_256.pt \
+  --prompt "Once upon a time" \
+  --gen-len 256 \
+  --temperature 0.0 \
+  --viz-video artifacts/media/diffusion_trace.mp4 \
   --trace-every 1 \
   --gif-frame-ms 180
 ```
+
+## TinyStories Dataset Prep
+
+Use `scripts/data.py` to stream TinyStories from Hugging Face and build a small local subset for laptop training:
+
+```bash
+python3 scripts/data.py \
+  --dataset roneneldan/TinyStories \
+  --split train \
+  --num-stories 10000 \
+  --seed 1337 \
+  --output data/stories.txt
+```
+
+Notes:
+
+- `--num-stories 100` or `--num-stories 200` is a good range for quick local runs.
+- Sampling uses streaming + shuffle buffer, so it does not download the full dataset at once.
+- `train.py` and `inference.py` use `data/stories.txt` and `artifacts/tokenizer/tokenizer.json`.
 
 
 ## Practical Next Improvements/Experiments
 
 - [ ] Add resume training from checkpoint (`--resume model.pt`)
-- [ ] Train on 100-200 Tiny Stories
+- [x] Train on 100-200 Tiny Stories
+- [x] Train on 2k+ Stories
 - [ ] Do loss curve ablations with gpt2 config for arm vs dif on 100-200 tiny stories
 - [ ] Muon Ablations
 - [ ] Train on SynTH/fineweb-edu
 - [ ] Try speed running for a 200M+ param model
+- [ ] Adding training with block based masking
+- [ ] Using uniform diffusion instead of masked diffusion
