@@ -128,7 +128,7 @@ Use `scripts/data.py` to stream TinyStories from Hugging Face and build a small 
 python3 scripts/data.py \
   --dataset roneneldan/TinyStories \
   --split train \
-  --num-stories 40000 \
+  --num-stories 50000 \
   --seed 1337 \
   --output data/stories.txt
 ```
