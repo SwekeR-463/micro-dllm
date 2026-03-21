@@ -246,3 +246,27 @@ Notes:
 - Keep `BLOCK_SIZE=256` first, then reduce only if needed:
   - Sequence length drives activation memory strongly (`O(B * L * d)` plus attention terms).
   - Dropping to `192` or `128` is a reliable fallback when OOM persists.
+
+## Muon + DDP Mistake (Kaggle)
+
+### Symptom
+
+- Error on multi-GPU run:
+  - `AttributeError: 'DistributedDataParallel' object has no attribute 'blocks'`
+
+### Root cause
+
+- After wrapping with DDP, `model` is a `DistributedDataParallel` wrapper.
+- Muon parameter grouping was trying to access internals like `model.blocks`, `model.lm_head`, etc. directly from the wrapper.
+
+### Fix
+
+- Build Muon param groups from the unwrapped module:
+  - `core_model = unwrap_model(model)` (equivalent to `model.module` under DDP).
+- Then use:
+  - `core_model.blocks`, `core_model.lm_head`, `core_model.token_emb`, `core_model.timestep_emb`.
+
+### Extra cleanup done
+
+- Replaced deprecated `torch.cuda.amp.GradScaler(...)` path with `torch.amp.GradScaler("cuda", ...)` (fallback kept for compatibility).
+- Removed duplicate scaler initialization.

@@ -591,13 +591,21 @@ if __name__ == "__main__":
             model = DDP(model, device_ids=ddp_device_ids)
 
         # optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-        hidden_weights = [p for p in model.blocks.parameters() if p.ndim >= 2]
-        hidden_gains_biases = [p for p in model.blocks.parameters() if p.ndim < 2]
+        if use_amp:
+            if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+                scaler = torch.amp.GradScaler("cuda", enabled=True)
+            else:
+                scaler = torch.cuda.amp.GradScaler(enabled=True)
+        else:
+            scaler = None
+
+        core_model = unwrap_model(model)
+        hidden_weights = [p for p in core_model.blocks.parameters() if p.ndim >= 2]
+        hidden_gains_biases = [p for p in core_model.blocks.parameters() if p.ndim < 2]
         nonhidden_params = [
-            *model.lm_head.parameters(),
-            *model.token_emb.parameters(),
-            *model.timestep_emb.parameters(),
+            *core_model.lm_head.parameters(),
+            *core_model.token_emb.parameters(),
+            *core_model.timestep_emb.parameters(),
         ]
         param_groups = [
             dict(params=hidden_weights, use_muon=True,
@@ -606,7 +614,6 @@ if __name__ == "__main__":
                 lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
         ]
         optimizer = MuonWithAuxAdam(param_groups)
-        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
 
         curve_steps = []
