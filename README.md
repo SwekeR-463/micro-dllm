@@ -111,11 +111,11 @@ At the end of training, `train.py` also prints a final validation metrics block 
 
 ```bash
 python3 inference.py \
-  --checkpoint artifacts/models/model_stories_100k_256_adamw.pt \
+  --checkpoint artifacts/models/model_stories_100k_256_muon.pt \
   --prompt "Once upon a time" \
   --gen-len 256 \
   --temperature 0.0 \
-  --viz-video artifacts/media/diffusion_trace_adamw_100k.mp4 \
+  --viz-video artifacts/media/diffusion_trace_muon_100k.mp4 \
   --trace-every 1 \
   --gif-frame-ms 180
 ```
