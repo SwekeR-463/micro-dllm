@@ -1,16 +1,15 @@
 from pathlib import Path
 
 from tokenizers import Tokenizer
-from tokenizers.decoders import ByteLevel as ByteLevelDecoder
-from tokenizers.models import BPE
-from tokenizers.pre_tokenizers import ByteLevel
-from tokenizers.trainers import BpeTrainer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.trainers import WordLevelTrainer
 
 
 SPECIAL_TOKENS = ["[PAD]", "[UNK]", "[MASK]"]
 
 
-def train_bpe_tokenizer(
+def train_word_tokenizer(
     input_path: str = "data/stories.txt",
     tokenizer_path: str = "artifacts/tokenizer/tokenizer.json",
     vocab_size: int = 2048,
@@ -20,11 +19,10 @@ def train_bpe_tokenizer(
     if not src.exists():
         raise FileNotFoundError(f"Tokenizer training data not found: {src}")
 
-    tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
-    tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
-    tokenizer.decoder = ByteLevelDecoder()
+    tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = Whitespace()
 
-    trainer = BpeTrainer(
+    trainer = WordLevelTrainer(
         vocab_size=vocab_size,
         min_frequency=min_frequency,
         special_tokens=SPECIAL_TOKENS,
@@ -41,3 +39,7 @@ def load_tokenizer(tokenizer_path: str = "artifacts/tokenizer/tokenizer.json") -
             f"Tokenizer file not found: {path}. Run train_tokenizer.py first."
         )
     return Tokenizer.from_file(str(path))
+
+
+# Backward-compatible alias for older callers.
+train_bpe_tokenizer = train_word_tokenizer

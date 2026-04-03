@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from utils.tokenizer_utils import train_bpe_tokenizer
+from utils.tokenizer_utils import train_word_tokenizer
 
 
 def main():
@@ -15,13 +15,13 @@ def main():
     args = parser.parse_args()
 
     if args.vocab_size < 128:
-        raise ValueError("--vocab-size should be >= 128 for stable BPE behavior.")
+        raise ValueError("--vocab-size should be >= 128 for stable word-level behavior.")
     if args.min_frequency < 1:
         raise ValueError("--min-frequency must be >= 1")
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
-    tokenizer = train_bpe_tokenizer(
+    tokenizer = train_word_tokenizer(
         input_path=args.input,
         tokenizer_path=args.output,
         vocab_size=args.vocab_size,

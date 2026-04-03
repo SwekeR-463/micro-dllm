@@ -1,6 +1,6 @@
 # micro-dllm
 
-This repo trains a micro-dLLM(~12.23M) based on [mercury's training and inference](https://arxiv.org/abs/2506.17298) approach with BPE tokens and generates text with iterative denoising.
+This repo trains a micro-dLLM(~12.23M) based on [mercury's training and inference](https://arxiv.org/abs/2506.17298) approach and generates text with iterative denoising.
 
 
 [![Diffusion Trace](./artifacts/media/diffusion_trace.gif)](./artifacts/media/diffusion_trace.mp4)
@@ -17,14 +17,14 @@ This repo trains a micro-dLLM(~12.23M) based on [mercury's training and inferenc
 
 ## Architecture Details
 
-- Tokenization: BPE tokenizer from `data/stories.txt` + `[MASK]` token
+- Tokenization: word-level tokenizer from `data/stories.txt` + `[MASK]` token
 - Context length: `block_size = 256` tokens
 - Diffusion steps: `T = 100`
 - Layers: `n_layer = 6`
 - Attention heads: `n_head = 6`
 - Embedding dimension: `n_embd = 384`
 - Head dimension: `head_dim = 64`
-- Parameters: `10,706,304` (~`10.71M`, with current `vocab_size = 66`)
+- Parameters: depends on tokenizer vocab size
 - Attention type: bidirectional (`is_causal=False`)
 - Positional scheme: RoPE (precomputed rotary cos/sin buffers)
 - Normalization: RMSNorm via `F.rms_norm`
@@ -69,7 +69,7 @@ Requirements:
 - `torch`
 - `Pillow` (for frame rendering)
 - `ffmpeg` (for MP4 export)
-- `tokenizers` (for BPE tokenization)
+- `tokenizers` (for tokenizer training)
 
 ## Training
 

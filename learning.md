@@ -270,3 +270,25 @@ Notes:
 
 - Replaced deprecated `torch.cuda.amp.GradScaler(...)` path with `torch.amp.GradScaler("cuda", ...)` (fallback kept for compatibility).
 - Removed duplicate scaler initialization.
+
+## Changes That Can Happen With Word-Level Tokenization
+
+- Punctuation may decode with extra spaces around it:
+  - Example: `fox,` can become `fox ,`
+  - This is normal with a whitespace-based word tokenizer
+
+- Sequence length usually drops:
+  - Words replace subword splits, so the same text often takes fewer tokens
+  - This can help diffusion training by reducing denoising steps per sample
+
+- Rare words become more fragile:
+  - Names, slang, typos, and domain-specific terms are more likely to map to `[UNK]`
+  - The model loses subword sharing that BPE provided
+
+- Vocabulary can get very large:
+  - Word-level tokenization needs a larger vocab to cover the corpus well
+  - A too-small vocab increases unknown tokens and hurts reconstruction quality
+
+- Reconstruction becomes more literal:
+  - Masked prediction is closer to whole-word recovery rather than subword completion
+  - That can be useful for stories, but it may reduce flexibility on noisy text
