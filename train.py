@@ -22,8 +22,8 @@ save_interval = int(os.environ.get("SAVE_INTERVAL", "500"))
 loss_curve_every = int(os.environ.get("LOSS_CURVE_EVERY", "10"))
 grad_accum_steps = int(os.environ.get("GRAD_ACCUM_STEPS", "1"))
 max_tokens = int(os.environ.get("MAX_TOKENS", "0"))
-checkpoint_path = "artifacts/models/model_stories_100k_256_muon.pt"
-loss_curve_path = "artifacts/media/new_loss_curves_muon_100k.png"
+checkpoint_path = "artifacts/models/model_stories_100k_256_word_adamw.pt"
+loss_curve_path = "artifacts/media/new_loss_curves_word_adamw_100k.png"
 
 n_embd = 384
 n_head = 6
@@ -590,7 +590,7 @@ if __name__ == "__main__":
             ddp_device_ids = [local_rank] if device.type == "cuda" else None
             model = DDP(model, device_ids=ddp_device_ids)
 
-        # optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
         if use_amp:
             if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
                 scaler = torch.amp.GradScaler("cuda", enabled=True)
@@ -599,21 +599,21 @@ if __name__ == "__main__":
         else:
             scaler = None
 
-        core_model = unwrap_model(model)
-        hidden_weights = [p for p in core_model.blocks.parameters() if p.ndim >= 2]
-        hidden_gains_biases = [p for p in core_model.blocks.parameters() if p.ndim < 2]
-        nonhidden_params = [
-            *core_model.lm_head.parameters(),
-            *core_model.token_emb.parameters(),
-            *core_model.timestep_emb.parameters(),
-        ]
-        param_groups = [
-            dict(params=hidden_weights, use_muon=True,
-                lr=0.02, weight_decay=0.01),
-            dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
-                lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
-        ]
-        optimizer = MuonWithAuxAdam(param_groups)
+        #core_model = unwrap_model(model)
+        #hidden_weights = [p for p in core_model.blocks.parameters() if p.ndim >= 2]
+        #hidden_gains_biases = [p for p in core_model.blocks.parameters() if p.ndim < 2]
+        #nonhidden_params = [
+        #    *core_model.lm_head.parameters(),
+        #    *core_model.token_emb.parameters(),
+        #    *core_model.timestep_emb.parameters(),
+        #]
+        #param_groups = [
+        #    dict(params=hidden_weights, use_muon=True,
+        #        lr=0.02, weight_decay=0.01),
+        #    dict(params=hidden_gains_biases+nonhidden_params, use_muon=False,
+        #        lr=3e-4, betas=(0.9, 0.95), weight_decay=0.01),
+        #]
+        #optimizer = MuonWithAuxAdam(param_groups)
 
 
         curve_steps = []
